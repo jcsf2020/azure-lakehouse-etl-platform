@@ -1,0 +1,6 @@
+return_id,return_date,order_item_id,product_id,customer_id,return_reason,refund_amount
+RET-2001,2026-03-16,OI-9003,SKU-1002,CUST-101,damaged_item,29.99
+RET-2002,2026-03-16,OI-9008,SKU-1003,CUST-104,wrong_item,49.50
+RET-2003,2026-03-17,OI-9011,SKU-1001,CUST-103,changed_mind,19.99
+RET-2004,2026-03-17,OI-9014,SKU-1003,CUST-106,late_delivery,59.00
+RET-2005,2026-03-17,OI-9017,SKU-1002,CUST-107,size_issue,34.95

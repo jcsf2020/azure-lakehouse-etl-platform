@@ -1,0 +1,56 @@
+[
+    {
+        "order_id": "ORD-5001",
+        "customer_id": "CUST-101",
+        "order_date": "2026-03-15T10:14:00Z",
+        "channel": "web",
+        "order_status": "completed",
+        "currency": "EUR",
+        "order_total": 54.94
+    },
+    {
+        "order_id": "ORD-5002",
+        "customer_id": "CUST-102",
+        "order_date": "2026-03-15T11:42:00Z",
+        "channel": "mobile_app",
+        "order_status": "completed",
+        "currency": "EUR",
+        "order_total": 59.00
+    },
+    {
+        "order_id": "ORD-5003",
+        "customer_id": "CUST-103",
+        "order_date": "2026-03-16T09:05:00Z",
+        "channel": "web",
+        "order_status": "completed",
+        "currency": "EUR",
+        "order_total": 19.99
+    },
+    {
+        "order_id": "ORD-5004",
+        "customer_id": "CUST-104",
+        "order_date": "2026-03-16T14:28:00Z",
+        "channel": "marketplace",
+        "order_status": "completed",
+        "currency": "EUR",
+        "order_total": 94.95
+    },
+    {
+        "order_id": "ORD-5005",
+        "customer_id": "CUST-106",
+        "order_date": "2026-03-17T08:57:00Z",
+        "channel": "web",
+        "order_status": "completed",
+        "currency": "EUR",
+        "order_total": 59.00
+    },
+    {
+        "order_id": "ORD-5006",
+        "customer_id": "CUST-107",
+        "order_date": "2026-03-17T16:11:00Z",
+        "channel": "mobile_app",
+        "order_status": "completed",
+        "currency": "EUR",
+        "order_total": 34.95
+    }
+]

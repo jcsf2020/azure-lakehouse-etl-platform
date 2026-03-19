@@ -1,0 +1,64 @@
+project: azure-lakehouse-etl-platform
+domain: retail_ecommerce
+
+sources:
+
+  - name: customers
+    source_type: api
+    format: json
+    load_pattern: incremental
+    business_grain: one row per customer account
+    primary_key: customer_id
+    landing_path: raw/api/customers/
+    bronze_table: bronze.customers_raw
+    silver_table: silver.customers
+
+  - name: products
+    source_type: api
+    format: json
+    load_pattern: full_refresh
+    business_grain: one row per product SKU
+    primary_key: product_id
+    landing_path: raw/api/products/
+    bronze_table: bronze.products_raw
+    silver_table: silver.products
+
+  - name: orders
+    source_type: api
+    format: json
+    load_pattern: incremental
+    business_grain: one row per order transaction
+    primary_key: order_id
+    landing_path: raw/api/orders/
+    bronze_table: bronze.orders_raw
+    silver_table: silver.orders
+
+  - name: order_items
+    source_type: api
+    format: json
+    load_pattern: incremental
+    business_grain: one row per order line item
+    primary_key: order_item_id
+    landing_path: raw/api/order_items/
+    bronze_table: bronze.order_items_raw
+    silver_table: silver.order_items
+
+  - name: inventory_snapshots
+    source_type: file
+    format: csv
+    load_pattern: full_refresh
+    business_grain: one row per product per warehouse per snapshot date
+    primary_key: [snapshot_date, product_id, warehouse_id]
+    landing_path: raw/files/inventory_snapshots/
+    bronze_table: bronze.inventory_snapshots_raw
+    silver_table: silver.inventory_snapshots
+
+  - name: returns
+    source_type: file
+    format: csv
+    load_pattern: incremental
+    business_grain: one row per returned order item
+    primary_key: return_id
+    landing_path: raw/files/returns/
+    bronze_table: bronze.returns_raw
+    silver_table: silver.returns
