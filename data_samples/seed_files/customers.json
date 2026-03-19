@@ -1,0 +1,72 @@
+[
+    {
+        "customer_id": "CUST-101",
+        "first_name": "Ana",
+        "last_name": "Silva",
+        "email": "ana.silva@example.com",
+        "country": "PT",
+        "city": "Lisbon",
+        "registration_date": "2025-11-03",
+        "customer_status": "active"
+    },
+    {
+        "customer_id": "CUST-102",
+        "first_name": "Bruno",
+        "last_name": "Costa",
+        "email": "bruno.costa@example.com",
+        "country": "PT",
+        "city": "Porto",
+        "registration_date": "2025-12-15",
+        "customer_status": "active"
+    },
+    {
+        "customer_id": "CUST-103",
+        "first_name": "Carla",
+        "last_name": "Rocha",
+        "email": "carla.rocha@example.com",
+        "country": "PT",
+        "city": "Braga",
+        "registration_date": "2026-01-08",
+        "customer_status": "active"
+    },
+    {
+        "customer_id": "CUST-104",
+        "first_name": "Diogo",
+        "last_name": "Pereira",
+        "email": "diogo.pereira@example.com",
+        "country": "ES",
+        "city": "Madrid",
+        "registration_date": "2025-10-21",
+        "customer_status": "active"
+    },
+    {
+        "customer_id": "CUST-105",
+        "first_name": "Eva",
+        "last_name": "Martins",
+        "email": "eva.martins@example.com",
+        "country": "PT",
+        "city": "Coimbra",
+        "registration_date": "2026-02-02",
+        "customer_status": "inactive"
+    },
+    {
+        "customer_id": "CUST-106",
+        "first_name": "Filipe",
+        "last_name": "Sousa",
+        "email": "filipe.sousa@example.com",
+        "country": "PT",
+        "city": "Faro",
+        "registration_date": "2025-09-12",
+        "customer_status": "active"
+    },
+    {
+        "customer_id": "CUST-107",
+        "first_name": "Gabriela",
+        "last_name": "Fernandes",
+        "email": "gabriela.fernandes@example.com",
+        "country": "ES",
+        "city": "Barcelona",
+        "registration_date": "2026-01-28",
+        "customer_status": "active"
+    }
+]

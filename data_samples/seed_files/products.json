@@ -1,0 +1,62 @@
+[
+    {
+        "product_id": "SKU-1001",
+        "product_name": "Wireless Mouse",
+        "category": "Electronics",
+        "subcategory": "Computer Accessories",
+        "brand": "TechFlow",
+        "list_price": 19.99,
+        "cost_price": 8.50,
+        "currency": "EUR",
+        "is_active": true,
+        "last_updated": "2026-03-15T09:00:00Z"
+    },
+    {
+        "product_id": "SKU-1002",
+        "product_name": "Mechanical Keyboard",
+        "category": "Electronics",
+        "subcategory": "Computer Accessories",
+        "brand": "KeyForge",
+        "list_price": 34.95,
+        "cost_price": 16.75,
+        "currency": "EUR",
+        "is_active": true,
+        "last_updated": "2026-03-15T09:00:00Z"
+    },
+    {
+        "product_id": "SKU-1003",
+        "product_name": "Noise Cancelling Headphones",
+        "category": "Electronics",
+        "subcategory": "Audio",
+        "brand": "SoundPeak",
+        "list_price": 59.00,
+        "cost_price": 28.40,
+        "currency": "EUR",
+        "is_active": true,
+        "last_updated": "2026-03-15T09:00:00Z"
+    },
+    {
+        "product_id": "SKU-1004",
+        "product_name": "Laptop Stand",
+        "category": "Office",
+        "subcategory": "Workspace Accessories",
+        "brand": "DeskRise",
+        "list_price": 24.50,
+        "cost_price": 11.20,
+        "currency": "EUR",
+        "is_active": true,
+        "last_updated": "2026-03-15T09:00:00Z"
+    },
+    {
+        "product_id": "SKU-1005",
+        "product_name": "USB-C Hub",
+        "category": "Electronics",
+        "subcategory": "Connectivity",
+        "brand": "PortLink",
+        "list_price": 42.00,
+        "cost_price": 19.10,
+        "currency": "EUR",
+        "is_active": false,
+        "last_updated": "2026-03-15T09:00:00Z"
+    }
+]

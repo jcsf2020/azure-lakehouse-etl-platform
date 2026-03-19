@@ -1,0 +1,74 @@
+[
+    {
+        "order_item_id": "OI-9001",
+        "order_id": "ORD-5001",
+        "product_id": "SKU-1001",
+        "quantity": 1,
+        "unit_price": 19.99,
+        "discount_amount": 0.00,
+        "line_total": 19.99
+    },
+    {
+        "order_item_id": "OI-9002",
+        "order_id": "ORD-5001",
+        "product_id": "SKU-1002",
+        "quantity": 1,
+        "unit_price": 34.95,
+        "discount_amount": 0.00,
+        "line_total": 34.95
+    },
+    {
+        "order_item_id": "OI-9003",
+        "order_id": "ORD-5002",
+        "product_id": "SKU-1003",
+        "quantity": 1,
+        "unit_price": 59.00,
+        "discount_amount": 0.00,
+        "line_total": 59.00
+    },
+    {
+        "order_item_id": "OI-9004",
+        "order_id": "ORD-5003",
+        "product_id": "SKU-1001",
+        "quantity": 1,
+        "unit_price": 19.99,
+        "discount_amount": 0.00,
+        "line_total": 19.99
+    },
+    {
+        "order_item_id": "OI-9005",
+        "order_id": "ORD-5004",
+        "product_id": "SKU-1002",
+        "quantity": 1,
+        "unit_price": 34.95,
+        "discount_amount": 0.00,
+        "line_total": 34.95
+    },
+    {
+        "order_item_id": "OI-9006",
+        "order_id": "ORD-5004",
+        "product_id": "SKU-1003",
+        "quantity": 1,
+        "unit_price": 59.00,
+        "discount_amount": 0.00,
+        "line_total": 59.00
+    },
+    {
+        "order_item_id": "OI-9007",
+        "order_id": "ORD-5005",
+        "product_id": "SKU-1003",
+        "quantity": 1,
+        "unit_price": 59.00,
+        "discount_amount": 0.00,
+        "line_total": 59.00
+    },
+    {
+        "order_item_id": "OI-9008",
+        "order_id": "ORD-5006",
+        "product_id": "SKU-1002",
+        "quantity": 1,
+        "unit_price": 34.95,
+        "discount_amount": 0.00,
+        "line_total": 34.95
+    }
+]
