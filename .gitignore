@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# Testing / coverage
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Jupyter / notebooks
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+
+# IDE / editor
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Local environment / secrets
+.env
+.env.*
+*.local
+
+# Databricks / temp artifacts
+dbfs/
+tmp/
+temp/
+
+# Generated data / local-only artifacts
+data_samples/generated/
