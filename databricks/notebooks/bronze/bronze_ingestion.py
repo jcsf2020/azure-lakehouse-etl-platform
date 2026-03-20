@@ -50,11 +50,21 @@ def get_spark() -> SparkSession:
 
 def read_raw_source(spark: SparkSession, config: BronzeSourceConfig) -> DataFrame:
     """Read a raw landed source using the configured file format."""
-    return (
-        spark.read.format(config.source_format)
-        .option("header", "true")
-        .load(config.input_path)
-    )
+    if config.source_format == "csv":
+        return (
+            spark.read.format("csv")
+            .option("header", "true")
+            .load(config.input_path)
+        )
+
+    if config.source_format == "json":
+        return (
+            spark.read.format("json")
+            .option("multiline", "true")
+            .load(config.input_path)
+        )
+
+    raise ValueError(f"Unsupported source format: {config.source_format}")
 
 
 def write_bronze_delta(df: DataFrame, config: BronzeSourceConfig) -> None:
@@ -78,10 +88,7 @@ def ingest_source(spark: SparkSession, config: BronzeSourceConfig) -> None:
 def default_sources() -> Iterable[BronzeSourceConfig]:
     """Return Bronze source definitions derived from the project catalog."""
     catalog_sources = list_sources()
-    file_sources = [
-        source for source in catalog_sources if source.get("source_type") == "file"
-    ]
-    return [build_source_config(source) for source in file_sources]
+    return [build_source_config(source) for source in catalog_sources]
 
 
 def main() -> None:
