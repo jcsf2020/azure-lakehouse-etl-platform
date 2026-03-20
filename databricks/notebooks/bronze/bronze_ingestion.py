@@ -7,40 +7,10 @@ transformation and ingestion metadata.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Iterable
-
 from pyspark.sql import DataFrame, SparkSession
 
-from azure_lakehouse_etl.bronze_utils import (
-    add_standard_bronze_metadata,
-    build_bronze_output_path,
-    build_bronze_table_name,
-)
-from azure_lakehouse_etl.source_catalog import list_sources
-
-
-@dataclass(frozen=True)
-class BronzeSourceConfig:
-    """Configuration for a single Bronze ingestion source."""
-
-    source_name: str
-    source_format: str
-    input_path: str
-    output_table: str
-    output_path: str
-
-
-def build_source_config(source: dict[str, Any]) -> BronzeSourceConfig:
-    """Convert a catalog source entry into a Bronze source config."""
-    source_name = source["name"]
-    return BronzeSourceConfig(
-        source_name=source_name,
-        source_format=source["format"],
-        input_path=f"data_samples/seed_files/{source_name}.{source['format']}",
-        output_table=build_bronze_table_name(source_name),
-        output_path=build_bronze_output_path(source_name),
-    )
+from azure_lakehouse_etl.bronze_sources import BronzeSourceConfig, default_sources
+from azure_lakehouse_etl.bronze_utils import add_standard_bronze_metadata
 
 
 def get_spark() -> SparkSession:
@@ -83,12 +53,6 @@ def ingest_source(spark: SparkSession, config: BronzeSourceConfig) -> None:
     raw_df = read_raw_source(spark, config)
     bronze_df = add_standard_bronze_metadata(raw_df, config.source_name)
     write_bronze_delta(bronze_df, config)
-
-
-def default_sources() -> Iterable[BronzeSourceConfig]:
-    """Return Bronze source definitions derived from the project catalog."""
-    catalog_sources = list_sources()
-    return [build_source_config(source) for source in catalog_sources]
 
 
 def main() -> None:
