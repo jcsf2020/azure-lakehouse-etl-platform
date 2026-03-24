@@ -212,9 +212,11 @@ def test_surrogate_key_is_deterministic_and_non_null() -> None:
 @requires_java
 def test_surrogate_key_null_column_does_not_produce_null() -> None:
     """A NULL natural key column must not produce a NULL surrogate key."""
+    from pyspark.sql.types import StringType, StructField, StructType
+
     spark = _local_spark()
-    rows = [{"id": None, "source": "erp"}]
-    df = spark.createDataFrame(rows)
+    schema = StructType([StructField("id", StringType(), True), StructField("source", StringType(), True)])
+    df = spark.createDataFrame([(None, "erp")], schema=schema)
     result = df.withColumn("sk", surrogate_key("id", "source")).select("sk").collect()
     assert result[0]["sk"] is not None
 
