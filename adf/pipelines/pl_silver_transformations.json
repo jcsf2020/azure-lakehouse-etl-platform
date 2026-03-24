@@ -1,0 +1,142 @@
+{
+  "name": "pl_silver_transformations",
+  "properties": {
+    "description": "Executes all Silver layer transformation notebooks. Independent entity notebooks run in parallel; order_items runs after orders and products are complete.",
+    "activities": [
+      {
+        "name": "Run Silver Customers",
+        "description": "Transform raw customer data into the Silver customers table.",
+        "type": "DatabricksNotebook",
+        "linkedServiceName": {
+          "referenceName": "ls_databricks_workspace",
+          "type": "LinkedServiceReference"
+        },
+        "typeProperties": {
+          "notebookPath": "/Shared/azure-lakehouse-etl/silver/silver_customers",
+          "baseParameters": {
+            "pipeline_run_date": {
+              "value": "@pipeline().parameters.pipeline_run_date",
+              "type": "Expression"
+            }
+          }
+        },
+        "dependsOn": []
+      },
+      {
+        "name": "Run Silver Products",
+        "description": "Transform raw product data into the Silver products table.",
+        "type": "DatabricksNotebook",
+        "linkedServiceName": {
+          "referenceName": "ls_databricks_workspace",
+          "type": "LinkedServiceReference"
+        },
+        "typeProperties": {
+          "notebookPath": "/Shared/azure-lakehouse-etl/silver/silver_products",
+          "baseParameters": {
+            "pipeline_run_date": {
+              "value": "@pipeline().parameters.pipeline_run_date",
+              "type": "Expression"
+            }
+          }
+        },
+        "dependsOn": []
+      },
+      {
+        "name": "Run Silver Inventory Snapshots",
+        "description": "Transform raw inventory data into the Silver inventory snapshots table.",
+        "type": "DatabricksNotebook",
+        "linkedServiceName": {
+          "referenceName": "ls_databricks_workspace",
+          "type": "LinkedServiceReference"
+        },
+        "typeProperties": {
+          "notebookPath": "/Shared/azure-lakehouse-etl/silver/silver_inventory_snapshots",
+          "baseParameters": {
+            "pipeline_run_date": {
+              "value": "@pipeline().parameters.pipeline_run_date",
+              "type": "Expression"
+            }
+          }
+        },
+        "dependsOn": []
+      },
+      {
+        "name": "Run Silver Orders",
+        "description": "Transform raw order data into the Silver orders table.",
+        "type": "DatabricksNotebook",
+        "linkedServiceName": {
+          "referenceName": "ls_databricks_workspace",
+          "type": "LinkedServiceReference"
+        },
+        "typeProperties": {
+          "notebookPath": "/Shared/azure-lakehouse-etl/silver/silver_orders",
+          "baseParameters": {
+            "pipeline_run_date": {
+              "value": "@pipeline().parameters.pipeline_run_date",
+              "type": "Expression"
+            }
+          }
+        },
+        "dependsOn": []
+      },
+      {
+        "name": "Run Silver Returns",
+        "description": "Transform raw returns data into the Silver returns table.",
+        "type": "DatabricksNotebook",
+        "linkedServiceName": {
+          "referenceName": "ls_databricks_workspace",
+          "type": "LinkedServiceReference"
+        },
+        "typeProperties": {
+          "notebookPath": "/Shared/azure-lakehouse-etl/silver/silver_returns",
+          "baseParameters": {
+            "pipeline_run_date": {
+              "value": "@pipeline().parameters.pipeline_run_date",
+              "type": "Expression"
+            }
+          }
+        },
+        "dependsOn": []
+      },
+      {
+        "name": "Run Silver Order Items",
+        "description": "Transform raw order items data into the Silver order_items table. Depends on orders and products being available.",
+        "type": "DatabricksNotebook",
+        "linkedServiceName": {
+          "referenceName": "ls_databricks_workspace",
+          "type": "LinkedServiceReference"
+        },
+        "typeProperties": {
+          "notebookPath": "/Shared/azure-lakehouse-etl/silver/silver_order_items",
+          "baseParameters": {
+            "pipeline_run_date": {
+              "value": "@pipeline().parameters.pipeline_run_date",
+              "type": "Expression"
+            }
+          }
+        },
+        "dependsOn": [
+          {
+            "activity": "Run Silver Orders",
+            "dependencyConditions": ["Succeeded"]
+          },
+          {
+            "activity": "Run Silver Products",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ]
+      }
+    ],
+    "parameters": {
+      "pipeline_run_date": {
+        "type": "string"
+      }
+    },
+    "annotations": [
+      "lakehouse",
+      "silver",
+      "transformations"
+    ]
+  },
+  "type": "Microsoft.DataFactory/factories/pipelines"
+}

@@ -1,0 +1,38 @@
+{
+  "name": "pl_bronze_ingestion",
+  "properties": {
+    "description": "Executes the Bronze ingestion Databricks notebook to land raw source data into the Bronze layer of the lakehouse.",
+    "activities": [
+      {
+        "name": "Run Bronze Ingestion Notebook",
+        "description": "Triggers the bronze_ingestion notebook on the shared Databricks cluster to ingest raw data from source systems.",
+        "type": "DatabricksNotebook",
+        "linkedServiceName": {
+          "referenceName": "ls_databricks_workspace",
+          "type": "LinkedServiceReference"
+        },
+        "typeProperties": {
+          "notebookPath": "/Shared/azure-lakehouse-etl/bronze/bronze_ingestion",
+          "baseParameters": {
+            "pipeline_run_date": {
+              "value": "@pipeline().parameters.pipeline_run_date",
+              "type": "Expression"
+            }
+          }
+        },
+        "dependsOn": []
+      }
+    ],
+    "parameters": {
+      "pipeline_run_date": {
+        "type": "string"
+      }
+    },
+    "annotations": [
+      "lakehouse",
+      "bronze",
+      "ingestion"
+    ]
+  },
+  "type": "Microsoft.DataFactory/factories/pipelines"
+}
