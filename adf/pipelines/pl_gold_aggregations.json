@@ -1,0 +1,76 @@
+{
+  "name": "pl_gold_aggregations",
+  "properties": {
+    "description": "Executes all Gold layer aggregation notebooks. Daily sales and daily returns run in parallel; inventory health runs independently.",
+    "activities": [
+      {
+        "name": "Run Gold Daily Sales",
+        "description": "Aggregate Silver order data into the Gold daily sales summary table.",
+        "type": "DatabricksNotebook",
+        "linkedServiceName": {
+          "referenceName": "ls_databricks_workspace",
+          "type": "LinkedServiceReference"
+        },
+        "typeProperties": {
+          "notebookPath": "/Shared/azure-lakehouse-etl/gold/gold_daily_sales",
+          "baseParameters": {
+            "pipeline_run_date": {
+              "value": "@pipeline().parameters.pipeline_run_date",
+              "type": "Expression"
+            }
+          }
+        },
+        "dependsOn": []
+      },
+      {
+        "name": "Run Gold Daily Returns",
+        "description": "Aggregate Silver returns data into the Gold daily returns summary table.",
+        "type": "DatabricksNotebook",
+        "linkedServiceName": {
+          "referenceName": "ls_databricks_workspace",
+          "type": "LinkedServiceReference"
+        },
+        "typeProperties": {
+          "notebookPath": "/Shared/azure-lakehouse-etl/gold/gold_daily_returns",
+          "baseParameters": {
+            "pipeline_run_date": {
+              "value": "@pipeline().parameters.pipeline_run_date",
+              "type": "Expression"
+            }
+          }
+        },
+        "dependsOn": []
+      },
+      {
+        "name": "Run Gold Inventory Health",
+        "description": "Aggregate Silver inventory snapshot data into the Gold inventory health table.",
+        "type": "DatabricksNotebook",
+        "linkedServiceName": {
+          "referenceName": "ls_databricks_workspace",
+          "type": "LinkedServiceReference"
+        },
+        "typeProperties": {
+          "notebookPath": "/Shared/azure-lakehouse-etl/gold/gold_inventory_health",
+          "baseParameters": {
+            "pipeline_run_date": {
+              "value": "@pipeline().parameters.pipeline_run_date",
+              "type": "Expression"
+            }
+          }
+        },
+        "dependsOn": []
+      }
+    ],
+    "parameters": {
+      "pipeline_run_date": {
+        "type": "string"
+      }
+    },
+    "annotations": [
+      "lakehouse",
+      "gold",
+      "aggregations"
+    ]
+  },
+  "type": "Microsoft.DataFactory/factories/pipelines"
+}

@@ -1,0 +1,68 @@
+{
+  "name": "pl_orchestrate_lakehouse",
+  "properties": {
+    "description": "Master orchestration pipeline. Executes Bronze ingestion, Silver transformations, and Gold aggregations in sequence. Each layer depends on the successful completion of the previous one.",
+    "activities": [
+      {
+        "name": "Execute Bronze Ingestion",
+        "description": "Run the Bronze layer ingestion pipeline to land raw data into the lakehouse.",
+        "type": "ExecutePipeline",
+        "typeProperties": {
+          "pipeline": {
+            "referenceName": "pl_bronze_ingestion",
+            "type": "PipelineReference"
+          },
+          "waitOnCompletion": true
+        },
+        "dependsOn": []
+      },
+      {
+        "name": "Execute Silver Transformations",
+        "description": "Run the Silver layer transformation pipeline after Bronze succeeds.",
+        "type": "ExecutePipeline",
+        "typeProperties": {
+          "pipeline": {
+            "referenceName": "pl_silver_transformations",
+            "type": "PipelineReference"
+          },
+          "waitOnCompletion": true
+        },
+        "dependsOn": [
+          {
+            "activity": "Execute Bronze Ingestion",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ]
+      },
+      {
+        "name": "Execute Gold Aggregations",
+        "description": "Run the Gold layer aggregation pipeline after Silver succeeds.",
+        "type": "ExecutePipeline",
+        "typeProperties": {
+          "pipeline": {
+            "referenceName": "pl_gold_aggregations",
+            "type": "PipelineReference"
+          },
+          "waitOnCompletion": true
+        },
+        "dependsOn": [
+          {
+            "activity": "Execute Silver Transformations",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ]
+      }
+    ],
+    "parameters": {
+      "pipeline_run_date": {
+        "type": "string"
+      }
+    },
+    "annotations": [
+      "lakehouse",
+      "orchestration",
+      "master"
+    ]
+  },
+  "type": "Microsoft.DataFactory/factories/pipelines"
+}
