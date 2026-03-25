@@ -45,3 +45,4 @@ temp/
 
 # Generated data / local-only artifacts
 data_samples/generated/
+artifacts/demo_gold/
