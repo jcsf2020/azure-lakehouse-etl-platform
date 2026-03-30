@@ -20,3 +20,6 @@ packages = ["src/azure_lakehouse_etl"]
 dev = [
     "pytest>=9.0.2",
 ]
+databricks = [
+    "databricks-sql-connector>=3.0",
+]

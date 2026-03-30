@@ -2,78 +2,93 @@
 
 ## 1. Pipeline Design Goals
 
-- Ingest raw retail/eCommerce source data reliably into ADLS Gen2
-- Apply structured transformations through Bronze → Silver → Gold layers
-- Maintain clear separation between orchestration (ADF) and transformation (Databricks)
-- Support incremental loads to avoid full re-ingestion on every run
-- Provide auditable data quality checkpoints at layer boundaries
-- Keep operational complexity low and failure recovery straightforward
+- Ingest raw retail source files reliably into ADLS Gen2 via Azure Data Factory
+- Apply structured transformations through Bronze → Silver → Gold using Databricks
+- Maintain strict separation between orchestration (ADF) and transformation (Databricks)
+- Keep the Gold layer SQL-driven: all serving objects are defined as `CREATE OR REPLACE TABLE/VIEW`
+- Support full rebuild on re-run without duplicating data (idempotent by design)
+- Provide an explicit, queryable data quality layer at Gold
 
 ---
 
 ## 2. High-Level Pipeline Sequence
 
-[Source Systems: APIs + flat files]
+```
+[Source files: CSV / JSON in ADLS Gen2]
               │
               ▼
-[ADF: Land raw extracts in ADLS Gen2 / Bronze landing]
+[ADF: pl_orchestrate_lakehouse — master pipeline]
               │
               ▼
-[ADF: Trigger Databricks Bronze standardisation job]
+[ADF → Databricks: pl_bronze_ingestion]
+  Databricks notebook reads seed files → writes to lakehouse_prod.bronze.*
+              │
+              ▼  (on success)
+[ADF → Databricks: pl_silver_transformations]
+  Databricks notebooks read bronze.* → write to lakehouse_prod.silver.*
+  (parallel execution; order_items_clean waits for orders_clean + products_clean)
+              │
+              ▼  (on success)
+[ADF → Databricks: pl_gold_aggregations]
+  Databricks SQL job executes sql/gold/*, sql/dq/*, sql/contracts/*
+  → writes to lakehouse_prod.gold.*
               │
               ▼
-[Databricks: Bronze landing -> Bronze Delta]
-              │
-              ▼
-[Databricks: Bronze -> Silver (cleanse, validate, deduplicate)]
-              │
-              ▼
-[Databricks: Silver -> Gold (aggregate, model for analytics)]
-              │
-              ▼
-[Gold Layer: Available for reporting / downstream consumers]
+[Gold Layer: facts, dims, aggregates, views, DQ, contract available in Databricks SQL]
+```
 
-Pipeline runs are batch-oriented and scheduled daily. No streaming ingestion is in scope.
+All runs are batch. No streaming component is in scope.
 
 ---
 
 ## 3. Pipeline Stages
 
-| Stage | Layer | Owner | Description |
+| Stage | Layer | Executor | Description |
 |---|---|---|---|
-| Raw Landing | Bronze landing | ADF | Land raw API extracts and flat files as-is into ADLS Gen2 |
-| Bronze Standardisation | Bronze Delta | Databricks | Convert landed raw data into queryable Bronze Delta tables with ingestion metadata |
-| Cleanse & Validate | Silver | Databricks | Parse, type-cast, deduplicate, and conform entity datasets |
-| Aggregate & Model | Gold | Databricks | Build facts, dimensions, and analytics-ready marts |
+| Bronze ingestion | `lakehouse_prod.bronze` | Databricks (triggered by ADF) | Read seed files from ADLS Gen2, write as Delta tables |
+| Silver transformation | `lakehouse_prod.silver` | Databricks (triggered by ADF) | Filter malformed records, write clean Delta tables |
+| Gold build | `lakehouse_prod.gold` | Databricks SQL (triggered by ADF) | Execute all SQL DDL for facts, dims, aggregates, DQ, contract |
 
 ---
 
 ## 4. Pipeline Stages — Detail
 
-### Bronze (Raw)
+### Bronze
 
-- Raw extracts from APIs and flat files are landed in ADLS Gen2 without business transformation.
-- Files land in a partitioned folder structure such as `bronze/{entity}/year={}/month={}/day={}`.
-- A Databricks standardisation step converts the landed raw data into Bronze Delta tables.
-- Bronze Delta tables retain source fidelity and add ingestion metadata such as `_ingest_timestamp`, `source_system`, and `pipeline_run_id`.
+- Databricks reads raw CSV and JSON seed files from ADLS Gen2 (`abfss://bronze@stazlakeetlweu01.dfs.core.windows.net/azure-lakehouse-etl/seed/`).
+- Schema is inferred. `_rescued_data` captures fields that do not conform to the inferred schema.
+- Five Delta tables are written to `lakehouse_prod.bronze`: `orders_raw`, `order_items_raw`, `customers_raw`, `products_raw`, `returns_raw`.
+- `CREATE OR REPLACE TABLE` semantics — full rebuild on each run.
 
-### Silver (Cleansed)
+### Silver
 
-- Databricks reads from Bronze Delta tables and applies:
-  - Schema enforcement and type casting
-  - Null handling and row-level validation
-  - Deduplication based on primary key + ingestion date
-  - Standardisation of string fields (trimming, casing)
-- Output written to Delta Lake tables in the Silver container.
-- Rejected rows are written to a quarantine path for review.
+- Databricks reads from `lakehouse_prod.bronze.*`.
+- One notebook per entity; each applies `WHERE _rescued_data IS NULL` and drops the rescue column.
+- Five Delta tables written to `lakehouse_prod.silver`: `orders_clean`, `order_items_clean`, `customers_clean`, `products_clean`, `returns_clean`.
+- ADF activity dependency graph:
+  - `silver_customers`, `silver_products`, `silver_orders`, `silver_returns` run in parallel.
+  - `silver_order_items` depends on `silver_orders` (Succeeded) and `silver_products` (Succeeded).
+- `CREATE OR REPLACE TABLE` semantics — full rebuild on each run.
 
-### Gold (Aggregated)
+### Gold
 
-- Databricks reads from Silver and builds analytics-ready models:
-  - Fact and dimension tables aligned to the retail domain (sales, products, customers, orders)
-  - Pre-aggregated metrics (daily revenue, category performance, customer order frequency)
-- Output written as Delta Lake tables in the Gold container.
-- These tables are the primary consumption layer for reporting.
+- A Databricks job executes the SQL DDL scripts in order:
+  1. `sql/gold/01_fact_sales.sql`
+  2. `sql/gold/02_dim_customers.sql`
+  3. `sql/gold/03_dim_products.sql`
+  4. `sql/gold/04_fact_returns_enriched.sql`
+  5. `sql/gold/05_orders_channel_summary.sql`
+  6. `sql/gold/06_returns_reason_summary.sql`
+  7. `sql/gold/07_returns_by_product.sql`
+  8. `sql/gold/08_v_sales_enriched.sql`
+  9. `sql/gold/09_v_returns_enriched.sql`
+  10. `sql/dq/01_dq_summary_v1.sql`
+  11. `sql/dq/02_v_dq_status.sql`
+  12. `sql/contracts/01_model_contract_v1.sql`
+- All scripts use `CREATE OR REPLACE TABLE/VIEW` — fully idempotent, no state dependency from a prior run.
+- `fact_returns_enriched` reads from `gold.fact_sales` — it must execute after `fact_sales`.
+- `returns_by_product` reads from `gold.fact_returns_enriched` — it must execute after `fact_returns_enriched`.
+- `dq_summary_v1` reads from multiple Gold tables — it must execute after all facts and dimensions.
 
 ---
 
@@ -81,102 +96,104 @@ Pipeline runs are batch-oriented and scheduled daily. No streaming ingestion is 
 
 ADF acts as the orchestration layer. It does not perform data transformation.
 
-- **Ingestion**: Copy Activity or API extraction activity lands raw source data in the Bronze landing zone in ADLS Gen2.
-- **Trigger**: Once landing completes, ADF triggers Databricks jobs for Bronze standardisation and downstream transformation.
-- **Scheduling**: Pipelines are triggered on a daily schedule using ADF triggers.
-- **Control flow**: ADF manages conditional execution (e.g. skip transformation if no new files), retries, and failure alerting.
-- **Parameterisation**: Pipeline parameters (date partition, source path, environment) are passed to downstream activities.
+- **Scheduling**: `pl_orchestrate_lakehouse` is triggered on a daily schedule via an ADF trigger.
+- **Sequencing**: Master pipeline executes three child pipelines in order: Bronze → Silver → Gold. Each stage uses `WaitOnCompletion: true`.
+- **Parameterisation**: `pipeline_run_date` is passed through from master pipeline to all child pipelines and activity notebooks.
+- **Triggering Databricks**: ADF uses the Databricks Notebook activity to trigger each Databricks notebook/job.
+- **Failure handling**: Activity failures propagate to the parent pipeline. ADF Monitor surfaces errors with full activity-level logs.
+- **Retry**: Copy Activities are configured with retry counts. Databricks activities surface as pipeline failures on first failure.
 
-ADF does not read or write Delta Lake tables directly. All Delta operations are handled by Databricks.
+ADF does not read or write Delta Lake tables directly.
 
 ---
 
 ## 6. Databricks Responsibilities
 
-- **Landing -> Bronze Delta**: PySpark notebooks/jobs convert landed raw API/file extracts into Delta-backed Bronze tables.
-- **Bronze → Silver**: PySpark notebooks/jobs that read raw files, apply schema, validate, and write to Silver Delta tables.
-- **Silver → Gold**: PySpark jobs that aggregate and model Silver data into Gold Delta tables.
-- **Delta Management**: MERGE (upsert) operations for incremental loads, schema evolution handling, and compaction where needed.
-- **Data Quality**: Row-level validation logic is applied within the Spark jobs. Quarantine writes for failed rows.
-- **Job parameters**: Jobs accept date parameters passed from ADF to control which partition to process.
+- **Bronze notebooks**: Read raw files from ADLS Gen2, write Delta to `lakehouse_prod.bronze`.
+- **Silver notebooks**: Read `lakehouse_prod.bronze.*`, filter and write to `lakehouse_prod.silver`.
+- **Gold SQL execution**: Execute `CREATE OR REPLACE TABLE/VIEW` DDL from `sql/` directory against `lakehouse_prod.gold`.
+- **Unity Catalog**: All writes go to the `lakehouse_prod` catalog, providing lineage and access control.
+- **Data quality**: `dq_summary_v1` is executed as part of the Gold build. Results are immediately queryable via `v_dq_status`.
 
-Databricks does not manage scheduling or orchestration. It executes what ADF invokes.
-
----
-
-## 7. Data Quality Checkpoints
-
-Quality is enforced at two points in the pipeline:
-
-**Bronze → Silver (row-level validation)**
-
-- Required fields are not null
-- Date fields parse correctly
-- Numeric fields are within expected ranges
-- Duplicate records are identified and removed
-- Rows failing validation are written to `silver/quarantine/` with a failure reason column
-
-**Silver → Gold (aggregate-level validation)**
-
-- Row counts post-aggregation are compared against Silver source counts
-- Key metrics (e.g. total revenue) are spot-checked for nulls or zeroes
-- If aggregate validation fails, the Gold write is aborted and an alert is raised
-
-No automated rollback is performed. Failed runs leave the previous valid Gold state intact.
+Databricks does not manage scheduling or triggers.
 
 ---
 
-## 8. Incremental Load Strategy
+## 7. Data Quality
 
-- **Landing (ADF)**: Copy Activity or API extraction uses a watermark pattern based on source last-modified date, source update timestamp, or pipeline run date. Only new or modified data is landed per run.
-- **Bronze Delta -> Silver (Databricks)**: Jobs process the Bronze Delta partition matching the current run date. Delta MERGE is used to upsert records into Silver, using the record's primary key as the merge condition.
-- **Silver → Gold (Databricks)**: Gold tables are rebuilt for the affected date partitions only. For aggregations that span rolling windows, only the affected partition range is recomputed.
+Data quality is enforced explicitly in the Gold layer via the DQ SQL assets.
 
-Full reloads are supported by passing an explicit date range parameter, bypassing the watermark.
+**`gold.dq_summary_v1`** — built as part of the Gold execution stage. Runs seven checks:
+
+| Check | Type |
+|---|---|
+| `dim_customers_duplicate_customer_id` | Uniqueness |
+| `dim_customers_null_customer_id` | Completeness |
+| `dim_products_duplicate_product_id` | Uniqueness |
+| `dim_products_null_product_id` | Completeness |
+| `fact_sales_duplicate_order_item_id` | Uniqueness |
+| `fact_sales_null_order_item_id` | Completeness |
+| `fact_returns_unmatched_sales` | Referential integrity |
+
+**`gold.v_dq_status`** — derives PASS / FAIL per check from `dq_summary_v1`. Query this view after any Gold build to assess quality state.
+
+Validated baseline: all checks PASS. `fact_returns_unmatched_sales = 3` is a known and expected count — `fact_returns_enriched` uses a LEFT JOIN that intentionally allows returns without a matching sale.
 
 ---
 
-## 9. Failure Handling and Reprocessing
+## 8. Idempotency and Reprocessing
 
-**ADF**
+- All Bronze, Silver, and Gold scripts use `CREATE OR REPLACE TABLE/VIEW`. Re-running any stage for any date produces the same deterministic result.
+- There are no incremental watermarks or MERGE operations in the current SQL asset layer. Each run is a full rebuild.
+- Re-running the full pipeline for a given date is safe. No duplicates are introduced.
+- To rerun only the Gold stage, execute the Databricks Gold SQL job directly (bypassing ADF Bronze and Silver triggers). Silver data must already exist for the results to be correct.
 
-- Copy Activities are configured with a retry count of 2 with a 5-minute interval.
-- Databricks job failures surface as ADF pipeline failures.
-- Failed pipeline runs can be re-triggered manually from the ADF monitor with the same parameters.
+---
 
-**Databricks**
+## 9. Failure Handling
 
-- Jobs are idempotent. Re-running a job for the same date partition produces the same result.
-- Delta Lake's transaction log ensures partial writes do not corrupt existing table state.
-- Quarantine tables retain failed rows so they can be inspected and reprocessed independently.
+**ADF pipeline fails at Bronze**
+- No Silver or Gold data changes.
+- Investigate the Databricks notebook log from the ADF activity output.
+- Fix the root cause and re-trigger `pl_orchestrate_lakehouse` with the same `pipeline_run_date`.
 
-**Alerting**
+**ADF pipeline fails at Silver**
+- Bronze is populated; Silver is partially populated or unchanged.
+- Identify which Silver notebook failed via ADF Monitor activity logs.
+- Inspect the Databricks job run logs.
+- Fix and re-trigger the full pipeline, or trigger `pl_silver_transformations` directly.
 
-- ADF pipeline failures trigger email alerts via ADF's built-in diagnostic settings.
-- No custom alerting framework is in scope for this project.
+**ADF pipeline fails at Gold**
+- Silver is fully populated; Gold is unchanged from its last successful state.
+- Review the Databricks job log for which SQL script failed.
+- Fix the SQL asset and re-execute the Gold job from Databricks directly.
+- The last successful Gold state remains intact until the next successful Gold build.
+
+**Gold data incorrect but no failure raised**
+- Query `v_dq_status` to surface any data quality violations.
+- Inspect Silver tables for the issue date.
+- Rebuild Gold by re-triggering the Gold execution job directly.
 
 ---
 
 ## 10. Operational Notes
 
-- All ADLS containers (bronze, silver, gold) use the same storage account with separate containers per layer.
-- Databricks clusters are job clusters (not always-on). They are provisioned on-demand per run to minimise cost.
-- Delta Lake tables use date-based partitioning for efficient incremental reads and writes.
-- The pipeline processes one day of data per run. Backfills are performed by re-running the pipeline with a date range override.
-- Source data used in this project is synthetic or anonymised for portfolio use. Formal PII handling controls are out of scope.
+- All ADLS containers (bronze, silver) use storage account `stazlakeetlweu01` in West Europe.
+- Databricks clusters are job clusters — provisioned on demand per run, terminated on completion.
+- The pipeline processes a full dataset per run. Partition-level incremental loads are not implemented.
+- Backfills are executed by re-triggering the pipeline with the target `pipeline_run_date`. Each re-run overwrites existing data for that run.
+- Do not trigger concurrent runs for the same date — `CREATE OR REPLACE` operations are not transactionally isolated across concurrent sessions.
 
 ---
 
 ## 11. Scope Boundaries
 
-The following are explicitly out of scope for this project:
+Out of scope:
 
 - Streaming or near-real-time ingestion
-- CI/CD pipeline automation (deployments are manual for this portfolio project)
-- Data masking, encryption at the column level, or PII handling
-- Full semantic layer design or production-grade BI delivery
-- Multi-region or disaster recovery configuration
-- SLA monitoring or formal data contracts between teams
-- Unity Catalog or fine-grained Databricks access control
-
-These boundaries reflect a deliberate decision to keep the project focused and demonstrable, not a gap in architectural awareness.
+- Delta MERGE / incremental upsert patterns
+- Quarantine / rejection tables for malformed Silver records (rows are filtered out, not quarantined)
+- CI/CD automated deployment of SQL assets or ADF pipeline definitions
+- Unity Catalog fine-grained access policies
+- Multi-region or disaster recovery patterns
+- SLA monitoring or formal alerting beyond ADF email notifications
