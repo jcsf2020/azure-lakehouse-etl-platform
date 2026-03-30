@@ -26,3 +26,28 @@ jobs:
 
       - name: Run smoke tests
         run: uv run python -m pytest tests/quality -v
+
+  bundle-validate:
+    name: Validate Databricks bundle
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Databricks CLI
+        # Installs Databricks CLI v2 (Go binary) which includes bundle support.
+        # Pinned to v0.239.1 for reproducibility.
+        run: |
+          curl -fsSL https://github.com/databricks/cli/releases/download/v0.239.1/databricks_cli_0.239.1_linux_amd64.tar.gz \
+            | tar -xz -C /usr/local/bin databricks
+          databricks --version
+
+      - name: Validate bundle (dev target)
+        # Validates databricks.yml schema and variable resolution locally.
+        # No deployment occurs. Dummy credentials satisfy CLI auth init;
+        # bundle validate does not make workspace API calls.
+        run: databricks bundle validate --target dev
+        env:
+          DATABRICKS_HOST: https://adb-placeholder.azuredatabricks.net
+          DATABRICKS_TOKEN: placeholder
