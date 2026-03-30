@@ -26,10 +26,10 @@ A Databricks Workflow (`spark_python_task`) is **not yet defined** in this bundl
 
 ## Bundle targets
 
-| Target | Mode        | Catalog label  | When to use                |
-|--------|-------------|----------------|----------------------------|
-| `dev`  | development | `dev_catalog`  | Feature branches, local dev |
-| `prod` | production  | `prod_catalog` | Future scheduled runs       |
+| Target | Catalog label  | When to use                |
+|--------|----------------|----------------------------|
+| `dev`  | `dev_catalog`  | Feature branches, local dev |
+| `prod` | `prod_catalog` | Future scheduled runs       |
 
 Both targets are defined in `databricks.yml`. The `dev` target is the default.
 
@@ -58,12 +58,15 @@ A clean validate produces a JSON summary of resolved resources with no errors.
 
 The `bundle-validate` job in `.github/workflows/ci-smoke-tests.yml`:
 
-- Installs Databricks CLI v2 (pinned release)
-- Runs `databricks bundle validate --target dev` with placeholder credentials
-- Validates YAML schema and variable resolution **locally** — no workspace API calls
+- Parses `databricks.yml` with Python (`pyyaml`, already a project dependency)
+- Asserts the required top-level keys (`bundle.name`, `targets.dev`) are present
 - Runs in parallel with the Python smoke tests on every push and pull request
+- Requires no Databricks credentials and makes no network calls
 
-This catches YAML syntax errors and schema violations before any human reviewer spends time on a PR with a broken bundle config.
+**Why not `databricks bundle validate`?**
+The Databricks CLI always calls the workspace `/api/2.0/preview/scim/v2/Me` endpoint during bundle validation, even for schema-only checks. This makes it unusable in shared CI without real workspace credentials. Full CLI-based validation belongs to a future authenticated phase (see table below).
+
+This catches YAML syntax errors and missing bundle structure before any human reviewer spends time on a PR with a broken config.
 
 ---
 
@@ -71,6 +74,7 @@ This catches YAML syntax errors and schema violations before any human reviewer 
 
 | Capability | Reason not in scope |
 |---|---|
+| `databricks bundle validate` in CI | CLI always contacts the workspace (`/api/2.0/preview/scim/v2/Me`); requires real credentials |
 | Live bundle deploy | Requires workspace-scoped credentials; not safe in shared CI |
 | Databricks Workflow job definition | `run_full_pipeline.py` uses `databricks-sql-connector` and resolves SQL assets from the local filesystem — it cannot run as a `spark_python_task` without packaging the SQL files alongside the script and resolving artifact output paths |
 | SQL catalog parameterisation | All SQL files hardcode the catalog name; parameterisation requires a dedicated pass |
