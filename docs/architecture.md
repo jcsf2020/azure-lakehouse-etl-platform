@@ -2,41 +2,45 @@
 
 ## Architecture Overview
 
-This platform implements a **medallion lakehouse architecture** on Azure, designed for retail and eCommerce analytics. Data flows from operational sources through three structured layers — Bronze, Silver, and Gold — before being served to analytical consumers.
+This platform implements a **medallion lakehouse architecture** on Azure for retail and eCommerce analytics. Data flows from operational source files through three structured layers — Bronze, Silver, and Gold — before being served via Databricks SQL under Unity Catalog.
 
-The design prioritises clarity of responsibility, reproducibility, and maintainability over complexity. Each component has a well-defined role, and the boundaries between orchestration, transformation, and serving are intentionally explicit.
+The design maintains a strict separation between orchestration (Azure Data Factory), transformation compute (Azure Databricks), and storage (ADLS Gen2). The Gold layer is SQL-driven: all serving objects are defined as Delta tables and views executed in Databricks SQL, not Python aggregations.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                          Data Sources                                   │
-│          (Flat files, REST APIs, Operational DBs, SaaS exports)         │
+│            (JSON / CSV flat files — orders, products, customers,        │
+│             order items, returns)                                        │
 └──────────────────────────────┬──────────────────────────────────────────┘
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                      Azure Data Factory (ADF)                            │
-│               Ingestion · Scheduling · Pipeline Orchestration            │
+│          Orchestration · Scheduling · Pipeline Control Flow              │
 └──────────────────────────────┬───────────────────────────────────────────┘
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                   ADLS Gen2  ·  Delta Lake Storage                       │
-│  ┌────────────────┐  ┌────────────────┐  ┌────────────────────────────┐ │
-│  │  Bronze Layer  │  │  Silver Layer  │  │       Gold Layer           │ │
-│  │  (raw zone)    │─▶│  (clean zone)  │─▶│  (business / serving zone) │ │
-│  └────────────────┘  └────────────────┘  └────────────────────────────┘ │
+│          ADLS Gen2  ·  stazlakeetlweu01  (West Europe)                   │
+│  ┌────────────────┐  ┌────────────────┐                                  │
+│  │  Bronze zone   │─▶│  Silver zone   │                                  │
+│  │  (raw Delta)   │  │  (clean Delta) │                                  │
+│  └────────────────┘  └────────────────┘                                  │
 └──────────────────────────────┬───────────────────────────────────────────┘
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                    Azure Databricks  ·  PySpark                          │
-│              Cleansing · Enrichment · Aggregation · dbt (optional)       │
+│                    Azure Databricks · Unity Catalog                      │
+│               lakehouse_prod.bronze / .silver / .gold                    │
+│                                                                          │
+│  Bronze → Silver: PySpark notebooks                                      │
+│  Silver → Gold:  SQL DDL executed in Databricks                          │
 └──────────────────────────────┬───────────────────────────────────────────┘
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                         Serving Layer                                    │
-│           Power BI  ·  Databricks SQL  ·  External consumers             │
+│                Gold Layer  ·  Databricks SQL                             │
+│   Facts · Dimensions · Aggregates · DQ Table/View · Model Contract       │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -46,122 +50,110 @@ The design prioritises clarity of responsibility, reproducibility, and maintaina
 
 | Component | Role |
 |---|---|
-| **Azure Data Factory (ADF)** | Ingestion pipelines and pipeline orchestration. Responsible for moving raw data into the Bronze layer on a schedule or trigger. |
-| **ADLS Gen2** | Unified storage layer for all medallion zones. Acts as the data lake backend for Delta tables. |
-| **Delta Lake** | Table format providing ACID transactions, schema enforcement, and time travel across all three medallion layers. |
-| **Azure Databricks** | Compute engine for all transformation workloads. PySpark notebooks and jobs handle cleansing, enrichment, and aggregation across Silver and Gold layers. |
-| **dbt (optional)** | SQL-based transformation layer targeting Databricks SQL. Used to model Gold layer assets with lineage and documentation built in. |
-| **Power BI (optional)** | Primary BI and reporting surface. Connects directly to Gold layer Delta tables or Databricks SQL endpoints. |
+| **Azure Data Factory (ADF)** | Orchestrates and schedules all pipeline stages. Triggers Databricks notebooks/jobs for Bronze → Silver and Gold execution. Does not perform data transformation. |
+| **ADLS Gen2 (`stazlakeetlweu01`)** | Unified storage for all medallion zones. Backs all Delta tables across Bronze, Silver, and Gold layers. |
+| **Delta Lake** | Table format providing ACID transactions, schema enforcement, and time travel. Used at all three layers. |
+| **Azure Databricks** | Compute engine. PySpark notebooks execute Bronze and Silver processing. Databricks SQL executes all Gold DDL assets. |
+| **Unity Catalog** | Governs the `lakehouse_prod` catalog namespace. All Bronze, Silver, and Gold objects are registered under `lakehouse_prod.{layer}.{table}`. |
 
 ---
 
 ## End-to-End Data Flow
 
-1. **Ingestion** — ADF pipelines pull data from source systems (CSV files, REST APIs, database exports) on a defined schedule. Raw files land in the Bronze zone of ADLS Gen2 with minimal transformation.
+1. **Bronze ingestion** — ADF triggers the Databricks Bronze ingestion notebook. Raw CSV and JSON seed files are read from ADLS Gen2 and written as Delta tables in `lakehouse_prod.bronze`. Schema is inferred; `_rescued_data` captures malformed fields.
 
-2. **Bronze → Silver** — A Databricks job reads the raw Delta tables in Bronze, applies schema validation, deduplication, and light cleansing, and writes the result to Silver as clean, typed Delta tables.
+2. **Bronze → Silver** — ADF triggers Silver transformation notebooks in Databricks (in parallel where possible, with dependency ordering for `order_items_clean`). Each Silver notebook filters out rows where `_rescued_data IS NOT NULL` and drops the rescue column, producing clean, typed Delta tables in `lakehouse_prod.silver`.
 
-3. **Silver → Gold** — A second Databricks job (or dbt model) aggregates and joins Silver tables into business-oriented entities — fact tables, dimension tables, and summary datasets — and writes them to Gold.
+3. **Silver → Gold** — A Databricks SQL job executes the Gold DDL assets defined in `sql/gold/`, `sql/dq/`, and `sql/contracts/`. Each script runs `CREATE OR REPLACE TABLE/VIEW`, making Gold builds fully idempotent. Gold reads exclusively from Silver (facts join Silver tables; dimensions are sourced directly from Silver).
 
-4. **Serving** — Power BI reports and dashboards connect to Gold layer tables. Ad-hoc queries run against Databricks SQL. External consumers can query Gold tables directly via the Delta Sharing protocol or SQL endpoints.
-
-All layers are append-or-overwrite Delta tables. Partitioning strategies are applied at the Silver and Gold layers based on query access patterns (typically by date or category).
+4. **Serving** — All Gold objects are queryable via Databricks SQL under `lakehouse_prod.gold`. The `v_dq_status` view provides a real-time data quality summary. The `model_contract_v1` table declares the grain and type of every Gold object.
 
 ---
 
 ## Medallion Layer Responsibilities
 
-### Bronze — Raw Zone
+### Bronze — Raw Zone (`lakehouse_prod.bronze`)
 
-- Stores data exactly as received from source systems.
-- No schema enforcement beyond what the file format provides.
-- Retains full history; nothing is deleted.
-- Serves as the audit and reprocessing baseline.
-- Format: Delta Lake (converted from raw CSV/JSON/Parquet on landing).
+- Stores data exactly as received from source files.
+- Schema inference via Databricks `_rescued_data` mechanism — malformed fields are captured, not lost.
+- No business transformations applied.
+- Five tables: `orders_raw`, `order_items_raw`, `customers_raw`, `products_raw`, `returns_raw`.
+- Source: `abfss://bronze@stazlakeetlweu01.dfs.core.windows.net/azure-lakehouse-etl/seed/`.
 
-### Silver — Cleansed Zone
+### Silver — Cleansed Zone (`lakehouse_prod.silver`)
 
-- Applies schema enforcement, null handling, and type casting.
-- Deduplicates records using business keys.
-- Standardises date formats, currency, and categorical values.
-- Joins across sources are minimal here; this layer stays close to source entities.
-- Format: Delta Lake with enforced schema and partitioning.
+- Filters out records with schema violations (`_rescued_data IS NOT NULL`).
+- Drops the `_rescued_data` column for downstream cleanliness.
+- Preserves natural keys; no surrogate key generation.
+- Five tables mirror the five Bronze tables with a `_clean` suffix.
+- Grain is enforced: one row per natural key per entity.
 
-### Gold — Business Zone
+### Gold — Business Zone (`lakehouse_prod.gold`)
 
-- Aggregates and joins Silver tables into analytical models.
-- Implements business logic: revenue calculations, customer segmentation, inventory metrics.
-- Structures data into a dimensional model (star schema) suitable for BI tooling.
-- Optimised for read performance: Z-ordering, liquid clustering (where applicable), and materialised aggregates.
-- Format: Delta Lake, optionally exposed via Databricks SQL or Delta Sharing.
+- All objects are SQL-defined (`CREATE OR REPLACE TABLE/VIEW`). No Python transformation at this layer.
+- Two fact tables: `fact_sales` (line-level revenue) and `fact_returns_enriched` (return events with LEFT JOIN reconciliation).
+- Two dimension tables: `dim_customers` and `dim_products` (Type 1 overwrite; natural keys, no surrogate keys).
+- Three aggregation tables: `orders_channel_summary`, `returns_reason_summary`, `returns_by_product`.
+- Two enrichment views: `v_sales_enriched`, `v_returns_enriched`.
+- One data quality table (`dq_summary_v1`) and one DQ view (`v_dq_status`).
+- One model contract table (`model_contract_v1`) declaring grain and layer for all Gold objects.
 
 ---
 
 ## Orchestration vs Transformation Responsibilities
 
-A common source of confusion in lakehouse projects is where orchestration ends and transformation begins. This platform keeps these responsibilities cleanly separated.
-
 **Azure Data Factory is responsible for:**
-- Triggering and scheduling pipeline runs.
-- Moving data from external sources into Bronze storage.
-- Monitoring pipeline success or failure.
-- Calling Databricks jobs via the ADF Databricks Notebook or Job activity.
-- Handling retry logic and alerting at the pipeline level.
+- Scheduling pipeline runs (daily trigger).
+- Sequencing pipeline stages: Bronze → Silver → Gold via `pl_orchestrate_lakehouse`.
+- Triggering Databricks notebooks and jobs via the ADF Databricks Notebook activity.
+- Passing the `pipeline_run_date` parameter to all child pipelines.
+- Monitoring pipeline success or failure and surfacing alerts.
+- Retry logic at the pipeline level.
 
 **Azure Databricks is responsible for:**
-- All data transformation logic (PySpark or SQL).
-- Writing output to Silver and Gold Delta tables.
-- Schema evolution and data quality checks within the transformation code.
-- Running dbt models if applicable.
+- Executing PySpark transformation logic for Bronze and Silver layers.
+- Executing SQL DDL for all Gold layer objects.
+- Writing output to Delta tables in ADLS Gen2 under Unity Catalog.
+- Data quality checks (via `dq_summary_v1` execution).
 
-ADF does not contain transformation logic. Databricks does not manage scheduling or ingestion triggers. This separation keeps each layer testable and independently maintainable.
+ADF does not contain transformation logic. Databricks does not manage scheduling. This boundary is enforced in the pipeline definitions.
 
 ---
 
 ## Serving Layer
 
-The Gold layer is the authoritative source for analytical consumption. Two serving patterns are supported:
+The Gold layer is the authoritative analytical surface. Two serving patterns are in use:
 
-**Power BI (interactive reporting)**
-- Connects to Gold Delta tables via the Databricks connector or a SQL endpoint.
-- Reports cover retail KPIs: sales performance, basket analysis, inventory turnover, customer cohort metrics.
-- Datasets are imported or run in DirectQuery depending on data volume and refresh requirements.
+**Databricks SQL (primary)**
+- All `lakehouse_prod.gold.*` tables and views are queryable directly.
+- `v_sales_enriched` and `v_returns_enriched` provide pre-joined, self-service views combining facts with customer and product context.
+- `v_dq_status` provides a live quality check summary.
 
-**Databricks SQL (ad-hoc and self-service)**
-- Analysts query Gold tables directly using Databricks SQL warehouses.
-- Supports exploratory analysis and one-off business questions without requiring a BI tool.
-
-**External consumers (optional)**
-- Gold tables can be shared externally via Delta Sharing.
-- REST-based consumers can query aggregated data through a lightweight API layer if required (not included in the core scope of this project).
+**Power BI (optional)**
+- Connects to Gold Delta tables or a Databricks SQL endpoint.
+- Retail KPIs: sales performance, return analysis, channel comparison.
 
 ---
 
 ## Operational Considerations
 
-**Idempotency** — All transformation jobs are written to be idempotent. Re-running a job for the same date partition produces the same result without duplicating data.
+**Idempotency** — All Gold DDL uses `CREATE OR REPLACE TABLE/VIEW`. Re-running any Gold script for any date produces the same deterministic result.
 
-**Incremental loads** — Where possible, Silver and Gold jobs process only new or changed data using Delta Lake's `MERGE` operation or partition pruning on ingestion date.
+**Data quality** — `dq_summary_v1` runs seven declarative checks: primary key uniqueness and null checks for dimensions and `fact_sales`, plus a referential integrity check for unmatched returns. Results are surfaced via `v_dq_status` (PASS/FAIL per check). Validated state: all PASS except `fact_returns_unmatched_sales = 3`, which is expected — the LEFT JOIN in `fact_returns_enriched` intentionally captures returns without a matched sale.
 
-**Data quality** — Basic expectation checks (row counts, null rates, referential integrity) are implemented as assertions within Databricks jobs. Failures halt the pipeline and surface in ADF monitoring.
+**Intentional LEFT JOIN semantics** — `fact_returns_enriched` joins `returns_clean` to `fact_sales` via LEFT JOIN on `order_item_id`. Returns with no matching sale record receive `reconciliation_status = 'UNMATCHED'` and retain null join columns. This is by design; unmatched returns are surfaced, not discarded.
 
-**Logging and observability** — Job run logs are written to a dedicated Delta table in the Silver layer. ADF pipeline run history provides a secondary audit trail.
-
-**Cost control** — Databricks clusters use autoscaling with a defined minimum and maximum node count. Jobs use spot instances where tolerated. Clusters are configured to terminate after a period of inactivity.
-
-**Schema evolution** — Delta Lake's schema evolution features (`mergeSchema`) are used conservatively. Breaking schema changes require a manual migration step to prevent silent downstream issues.
+**Delta Lake** — ACID transactions protect against partial writes. Time travel is available on all layers for audit and reprocessing.
 
 ---
 
 ## Scope Boundaries
 
-The following are intentionally out of scope for this project:
+Intentionally out of scope:
 
-- **Streaming ingestion** — All data flows are batch. Near-real-time patterns (Structured Streaming, Event Hubs) are not included.
-- **Infrastructure as code** — Terraform or Bicep templates are not part of this project. Resources are assumed to be provisioned manually or through the Azure portal.
-- **Network and security architecture** — Private endpoints, VNet injection, and managed identity configuration are referenced but not detailed. These are environment-specific concerns.
-- **Data governance** — Unity Catalog lineage, access policies, and data classification are noted as production best practices but are not fully implemented here.
-- **Multi-region or disaster recovery** — The platform targets a single Azure region. HA and DR patterns are not in scope.
-- **CI/CD pipelines** — Automated deployment of ADF pipelines and Databricks notebooks is not included, though the project structure supports it.
-
-These boundaries are deliberate. The goal is a clear, functional, and explainable platform — not a reference architecture for an enterprise of thousands.
+- **Streaming ingestion** — All flows are batch. No Event Hubs or Structured Streaming.
+- **SCD Type 2** — Dimension tables are Type 1 (overwrite). Historical versioning is not implemented in the current SQL assets.
+- **Surrogate keys** — Natural keys are used throughout. No SHA-256 or sequence-generated surrogate keys.
+- **Infrastructure as code** — No Terraform or Bicep. Resources are provisioned via the Azure portal.
+- **CI/CD for SQL assets** — SQL execution is manual or Databricks job-triggered; no automated deployment pipeline for DDL.
+- **Multi-region / disaster recovery** — Single Azure region deployment.

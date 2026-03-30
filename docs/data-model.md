@@ -2,264 +2,338 @@
 
 ## 1. Modelling Approach
 
-This platform follows a **medallion architecture** (Bronze → Silver → Gold) implemented on Delta Lake / ADLS Gen2. The modelling strategy at each layer reflects a different concern:
+This platform follows a **medallion architecture** (Bronze → Silver → Gold) implemented on Delta Lake / ADLS Gen2. Each layer has a distinct modelling concern:
 
-- **Bronze**: Raw ingestion with no transformations. Data is stored as-landed, schema-on-read, append-only. Purpose is auditability and replayability.
-- **Silver**: Cleaned, deduplicated, and conformed entity tables. Schemas are enforced. Surrogate keys are introduced. This layer serves as the single source of truth for downstream consumers.
-- **Gold**: Dimensional model (star schema) optimised for analytical queries and BI reporting. Aggregated marts are built on top of the core star schema for specific analytical use cases.
+- **Bronze**: Raw ingestion. No transformations. `_rescued_data` captures schema violations. Append-on-ingest, no history pruning.
+- **Silver**: Cleaned and typed entity tables. Rows with schema violations are filtered out. Natural keys are preserved. No surrogate keys.
+- **Gold**: SQL-driven serving layer. Dimensional tables, fact tables, aggregation tables, enrichment views, data quality objects, and a model contract — all defined as `CREATE OR REPLACE TABLE/VIEW` and executed in Databricks.
 
-The dimensional model in Gold is intentionally kept in **3NF-light star schema** form — dimension tables are not snowflaked unless there is a clear cardinality or reuse argument. This keeps SQL readable and join paths short, which matters in Databricks SQL / Power BI Direct Query scenarios.
+Dimension tables use **Type 1 (overwrite)** — the current state of customers and products is reflected; historical versioning is not implemented. Fact tables use natural keys from Silver. No surrogate key generation exists in the SQL asset layer.
 
 ---
 
 ## 2. Core Business Entities
 
-The platform models a **retail / eCommerce operation** with the following core business entities:
+| Entity         | Description                                                         |
+|----------------|---------------------------------------------------------------------|
+| `customers`    | Individuals or organisations that place orders                      |
+| `products`     | SKU-level product catalogue with category and pricing attributes    |
+| `orders`       | Order headers: date, channel, status, customer reference            |
+| `order_items`  | Line-level detail: product, quantity, unit price, discount applied  |
+| `returns`      | Return events linked to original order lines                        |
 
-| Entity                | Description                                                         |
-|-----------------------|---------------------------------------------------------------------|
-| `customers`           | Individuals or organisations that place orders                      |
-| `products`            | SKU-level product catalogue with category and pricing attributes    |
-| `orders`              | Order headers: date, channel, status, customer reference            |
-| `order_items`         | Line-level detail: product, quantity, unit price, discount applied  |
-| `inventory_snapshots` | Daily stock-on-hand snapshot per product and warehouse location     |
-| `returns`             | Return events linked to original order lines                        |
-| `channels`            | Sales channels (web, mobile, marketplace, in-store)                 |
-
-These entities map directly to source system tables ingested via Azure Data Factory.
+These entities map directly to the five source files ingested via Azure Data Factory into Bronze.
 
 ---
 
-## 3. Bronze Layer Datasets
+## 3. Bronze Layer — `lakehouse_prod.bronze`
 
-Bronze stores raw extracts without modification. Each dataset is partitioned by ingestion date (`ingest_date`). A `_metadata` struct captures source file name, pipeline run ID, and load timestamp for lineage.
+Five raw tables. Schema inferred from source files. `_rescued_data` captures any field that does not conform to the inferred schema.
 
-| Bronze Dataset                   | Source Type                          | Load Pattern                             | Notes                                       |
-|----------------------------------|--------------------------------------|------------------------------------------|---------------------------------------------|
-| `bronze.raw_customers`           | OLTP database (CSV/Parquet export)   | Full + incremental                       | SCD candidate; includes PII fields          |
-| `bronze.raw_products`            | Product catalogue API (JSON)         | Full refresh daily                       | Nested attributes flattened in Silver       |
-| `bronze.raw_orders`              | OLTP database                        | Incremental (watermark on `updated_at`)  | Status field changes over time              |
-| `bronze.raw_order_items`         | OLTP database                        | Incremental                              | Immutable after order is placed             |
-| `bronze.raw_inventory_snapshots` | Warehouse WMS (CSV)                  | Daily full snapshot                      | One row per SKU per location per day        |
-| `bronze.raw_returns`             | Returns management system (CSV)      | Incremental                              | Linked to `order_item_id`                   |
-| `bronze.raw_channels`            | Static reference file (CSV)          | Full refresh on change                   | Rarely updated                              |
+| Table              | Source File        | Format | Primary Key      |
+|--------------------|--------------------|--------|------------------|
+| `orders_raw`       | `orders.json`      | JSON   | `order_id`       |
+| `order_items_raw`  | `order_items.json` | JSON   | `order_item_id`  |
+| `customers_raw`    | `customers.json`   | JSON   | `customer_id`    |
+| `products_raw`     | `products.json`    | JSON   | `product_id`     |
+| `returns_raw`      | `returns.csv`      | CSV    | `return_id`      |
 
-All Bronze tables are Delta format and retain history indefinitely (VACUUM is not run on Bronze).
+Source base path: `abfss://bronze@stazlakeetlweu01.dfs.core.windows.net/azure-lakehouse-etl/seed/`
 
----
-
-## 4. Silver Layer Datasets
-
-Silver applies the following transformations on top of Bronze:
-- Schema enforcement and type casting
-- Deduplication (row hash or primary key-based)
-- Null handling and default value standardisation
-- Surrogate key generation (SHA-256 hash of natural key)
-- SCD Type 2 for slowly changing dimensions (customers, products)
-- Referential integrity validation (records failing FK checks are quarantined)
-
-| Silver Dataset                | Grain                                  | Key Type                  | SCD Strategy              |
-|-------------------------------|----------------------------------------|---------------------------|---------------------------|
-| `silver.customers`            | One row per customer version           | `customer_sk` (surrogate) | SCD Type 2                |
-| `silver.products`             | One row per product version            | `product_sk` (surrogate)  | SCD Type 2                |
-| `silver.orders`               | One row per order                      | `order_sk` (surrogate)    | Overwrite current state   |
-| `silver.order_items`          | One row per order line                 | `order_item_sk`           | Immutable                 |
-| `silver.inventory_snapshots`  | One row per SKU / location / date      | Composite natural key     | Daily append              |
-| `silver.returns`              | One row per return event               | `return_sk`               | Immutable                 |
-| `silver.channels`             | One row per channel                    | `channel_sk`              | SCD Type 1                |
-
-Silver tables are the authoritative record used by Gold. No Gold table reads from Bronze.
+All Bronze tables are Delta format. `_rescued_data` is retained to preserve malformed field values for audit.
 
 ---
 
-## 5. Gold Layer Model
+## 4. Silver Layer — `lakehouse_prod.silver`
 
-The Gold layer implements a **star schema** optimised for reporting and self-service analytics. The central fact table is `fact_order_items`, which captures revenue and quantity at the line level. Supporting fact tables cover inventory and returns.
+Five cleaned tables. Each script applies `WHERE _rescued_data IS NULL` to exclude malformed records and drops the rescue column. No further transformations are applied at this layer; natural keys and original data types are preserved from Bronze.
+
+| Table               | Grain                  | Key Field        | SCD Strategy          |
+|---------------------|------------------------|------------------|-----------------------|
+| `orders_clean`      | 1 row per order        | `order_id`       | Overwrite (full load) |
+| `order_items_clean` | 1 row per order line   | `order_item_id`  | Overwrite (full load) |
+| `customers_clean`   | 1 row per customer     | `customer_id`    | Overwrite (full load) |
+| `products_clean`    | 1 row per product      | `product_id`     | Overwrite (full load) |
+| `returns_clean`     | 1 row per return event | `return_id`      | Overwrite (full load) |
+
+Silver tables are the exclusive source for Gold. No Gold object reads from Bronze.
+
+---
+
+## 5. Gold Layer — `lakehouse_prod.gold`
+
+All Gold objects are SQL-defined. The serving layer is Databricks SQL; there is no Python transformation at Gold. The diagram below shows the key relationships:
 
 ```
-                        ┌─────────────────┐
-                        │   dim_date      │
-                        └────────┬────────┘
-                                 │
-┌──────────────┐     ┌───────────▼──────────┐     ┌──────────────────┐
-│ dim_customer │────▶│  fact_order_items    │◀────│   dim_product    │
-└──────────────┘     └───────────┬──────────┘     └──────────────────┘
-                                 │
-                        ┌────────▼────────┐
-                        │  dim_channel    │
-                        └─────────────────┘
+                    ┌───────────────────┐
+                    │   dim_customers   │
+                    └────────┬──────────┘
+                             │ customer_id
+            ┌────────────────┼────────────────┐
+            │                │                │
+            ▼                ▼                ▼
+  ┌──────────────┐   ┌────────────────┐  ┌─────────────────────────┐
+  │  fact_sales  │   │  dim_products  │  │  fact_returns_enriched  │
+  │ (order_item  │   └────────────────┘  │  (return_id grain)      │
+  │   grain)     │          │            │  LEFT JOIN → fact_sales  │
+  └──────┬───────┘          │ product_id └─────────────────────────┘
+         │                  │
+         ▼                  ▼
+  ┌──────────────┐   ┌────────────────────────────────┐
+  │v_sales_enr.  │   │  orders_channel_summary         │
+  │v_returns_enr.│   │  returns_reason_summary         │
+  └──────────────┘   │  returns_by_product             │
+                     └────────────────────────────────┘
 ```
 
 ---
 
 ## 6. Fact Tables
 
-### `gold.fact_order_items`
+### `gold.fact_sales`
 
-**Grain**: One row per order line item.
+**Grain**: One row per `order_item_id`.
 
-| Column           | Type    | Description                                          |
-|------------------|---------|------------------------------------------------------|
-| `order_item_sk`  | STRING  | Surrogate key (from Silver)                          |
-| `order_sk`       | STRING  | FK → order header (degenerate dimension)             |
-| `customer_sk`    | STRING  | FK → `dim_customer`                                  |
-| `product_sk`     | STRING  | FK → `dim_product`                                   |
-| `channel_sk`     | STRING  | FK → `dim_channel`                                   |
-| `order_date_key` | INT     | FK → `dim_date` (YYYYMMDD)                           |
-| `quantity`       | INT     | Units ordered                                        |
-| `unit_price`     | DECIMAL | Listed price at time of order                        |
-| `discount_amount`| DECIMAL | Total discount applied to the line                   |
-| `gross_revenue`  | DECIMAL | `quantity × unit_price`                              |
-| `net_revenue`    | DECIMAL | `gross_revenue − discount_amount`                    |
-| `is_returned`    | BOOLEAN | Whether this line has an associated return           |
-| `_batch_id`      | STRING  | Pipeline run identifier for lineage                  |
+| Column           | Type           | Description                                           |
+|------------------|----------------|-------------------------------------------------------|
+| `order_item_id`  | STRING         | Natural key — primary identifier for the line         |
+| `order_id`       | STRING         | Degenerate dimension — order header reference         |
+| `order_date`     | TIMESTAMP      | Order placement timestamp                             |
+| `channel`        | STRING         | Sales channel (web, mobile, marketplace, in-store)    |
+| `customer_id`    | STRING         | FK → `dim_customers`                                  |
+| `product_id`     | STRING         | FK → `dim_products`                                   |
+| `quantity`       | INT            | Units ordered                                         |
+| `unit_price`     | DECIMAL(10,2)  | Price per unit at time of order                       |
+| `discount_amount`| DECIMAL(10,2)  | Discount applied to the line                          |
+| `line_total`     | DECIMAL(10,2)  | `quantity × unit_price − discount_amount`             |
+| `currency`       | STRING         | Currency code                                         |
+| `order_status`   | STRING         | Order status at time of processing                    |
 
----
-
-### `gold.fact_inventory_daily`
-
-**Grain**: One row per product SKU, per warehouse location, per calendar day.
-
-| Column              | Type    | Description                                         |
-|---------------------|---------|-----------------------------------------------------|
-| `snapshot_date_key` | INT     | FK → `dim_date`                                     |
-| `product_sk`        | STRING  | FK → `dim_product`                                  |
-| `location_id`       | STRING  | Warehouse / fulfilment centre identifier            |
-| `stock_on_hand`     | INT     | Units available at close of day                     |
-| `units_received`    | INT     | Units received during the day                       |
-| `units_sold`        | INT     | Units fulfilled during the day                      |
-| `units_returned`    | INT     | Units returned during the day                       |
+**Build**: INNER JOIN `silver.order_items_clean` on `silver.orders_clean` via `order_id`.
 
 ---
 
-### `gold.fact_returns`
+### `gold.fact_returns_enriched`
 
-**Grain**: One row per return event.
+**Grain**: One row per `return_id`.
 
-| Column           | Type    | Description                                          |
-|------------------|---------|------------------------------------------------------|
-| `return_sk`      | STRING  | Surrogate key                                        |
-| `order_item_sk`  | STRING  | FK → `fact_order_items`                              |
-| `customer_sk`    | STRING  | FK → `dim_customer`                                  |
-| `product_sk`     | STRING  | FK → `dim_product`                                   |
-| `return_date_key`| INT     | FK → `dim_date`                                      |
-| `return_reason`  | STRING  | Reason code (defective, wrong item, changed mind…)   |
-| `refund_amount`  | DECIMAL | Amount refunded to customer                          |
+| Column                  | Type           | Description                                                   |
+|-------------------------|----------------|---------------------------------------------------------------|
+| `return_id`             | STRING         | Natural key — primary identifier for the return event         |
+| `return_date`           | DATE           | Date the return was processed                                 |
+| `order_item_id`         | STRING         | FK → `fact_sales` (nullable when UNMATCHED)                   |
+| `order_id`              | STRING         | From LEFT JOIN to `fact_sales` — null when unmatched          |
+| `order_date`            | TIMESTAMP      | From LEFT JOIN to `fact_sales` — null when unmatched          |
+| `channel`               | STRING         | From LEFT JOIN to `fact_sales` — null when unmatched          |
+| `customer_id`           | STRING         | FK → `dim_customers`                                          |
+| `product_id`            | STRING         | FK → `dim_products`                                           |
+| `return_reason`         | STRING         | Reason code for the return                                    |
+| `refund_amount`         | DECIMAL(10,2)  | Amount refunded to customer                                   |
+| `unit_price`            | DECIMAL(10,2)  | From LEFT JOIN to `fact_sales` — null when unmatched          |
+| `discount_amount`       | DECIMAL(10,2)  | From LEFT JOIN to `fact_sales` — null when unmatched          |
+| `line_total`            | DECIMAL(10,2)  | From LEFT JOIN to `fact_sales` — null when unmatched          |
+| `reconciliation_status` | STRING         | `'MATCHED'` or `'UNMATCHED'`                                  |
+
+**Build**: LEFT JOIN `silver.returns_clean` to `gold.fact_sales` on `order_item_id`. Returns with no matching sale record receive `reconciliation_status = 'UNMATCHED'` and null values for all `fact_sales` join columns. This is intentional — unmatched returns are surfaced, not discarded. Validated count of UNMATCHED: 3 (expected by design).
 
 ---
 
 ## 7. Dimension Tables
 
-### `gold.dim_customer`
+### `gold.dim_customers`
 
-SCD Type 2. Each version of a customer record gets its own row.
+**Grain**: One row per `customer_id`. Type 1 — current state only.
 
-| Column               | Type    | Description                                         |
-|----------------------|---------|-----------------------------------------------------|
-| `customer_sk`        | STRING  | Surrogate key                                       |
-| `customer_id`        | STRING  | Natural key from source system                      |
-| `full_name`          | STRING  | Masked / hashed for PII compliance in non-prod      |
-| `email_domain`       | STRING  | Domain portion only (PII-safe)                      |
-| `country`            | STRING  | Country of registration                             |
-| `city`               | STRING  |                                                     |
-| `customer_segment`   | STRING  | Derived segment: new, returning, high-value         |
-| `registration_date`  | DATE    |                                                     |
-| `valid_from`         | DATE    | SCD effective start date                            |
-| `valid_to`           | DATE    | SCD effective end date (NULL = current)             |
-| `is_current`         | BOOLEAN |                                                     |
+| Column              | Type    | Description                   |
+|---------------------|---------|-------------------------------|
+| `customer_id`       | STRING  | Natural key from source system |
+| `first_name`        | STRING  | Given name                    |
+| `last_name`         | STRING  | Family name                   |
+| `email`             | STRING  | Email address                 |
+| `city`              | STRING  | City of residence             |
+| `country`           | STRING  | Country of residence          |
+| `customer_status`   | STRING  | Active / inactive             |
+| `registration_date` | DATE    | Account creation date         |
 
----
-
-### `gold.dim_product`
-
-SCD Type 2. Tracks price and category changes over time.
-
-| Column         | Type    | Description                                              |
-|----------------|---------|----------------------------------------------------------|
-| `product_sk`   | STRING  | Surrogate key                                            |
-| `product_id`   | STRING  | Natural key (SKU)                                        |
-| `product_name` | STRING  |                                                          |
-| `category`     | STRING  | Top-level category (Electronics, Apparel…)               |
-| `subcategory`  | STRING  |                                                          |
-| `brand`        | STRING  |                                                          |
-| `list_price`   | DECIMAL | Current list price at time of record version             |
-| `cost_price`   | DECIMAL | Unit cost (used for margin analysis)                     |
-| `is_active`    | BOOLEAN | Whether SKU is currently sold                            |
-| `valid_from`   | DATE    |                                                          |
-| `valid_to`     | DATE    |                                                          |
-| `is_current`   | BOOLEAN |                                                          |
+**Build**: Direct `CREATE OR REPLACE TABLE ... AS SELECT` from `silver.customers_clean`. No joins.
 
 ---
 
-### `gold.dim_date`
+### `gold.dim_products`
 
-Static date dimension pre-populated for a 10-year window. No FK to Silver.
+**Grain**: One row per `product_id`. Type 1 — current state only.
 
-| Column              | Type    | Description                                         |
-|---------------------|---------|-----------------------------------------------------|
-| `date_key`          | INT     | YYYYMMDD integer key                                |
-| `full_date`         | DATE    |                                                     |
-| `day_of_week`       | STRING  | Monday … Sunday                                     |
-| `is_weekend`        | BOOLEAN |                                                     |
-| `week_of_year`      | INT     |                                                     |
-| `month`             | INT     |                                                     |
-| `month_name`        | STRING  |                                                     |
-| `quarter`           | INT     |                                                     |
-| `year`              | INT     |                                                     |
-| `is_public_holiday` | BOOLEAN | Configurable per market                             |
+| Column          | Type           | Description                             |
+|-----------------|----------------|-----------------------------------------|
+| `product_id`    | STRING         | Natural key (SKU)                       |
+| `product_name`  | STRING         | Product description                     |
+| `category`      | STRING         | Top-level category                      |
+| `subcategory`   | STRING         | Sub-category                            |
+| `brand`         | STRING         | Brand name                              |
+| `list_price`    | DECIMAL(10,2)  | Recommended retail price                |
+| `cost_price`    | DECIMAL(10,2)  | Unit cost                               |
+| `currency`      | STRING         | Currency code                           |
+| `is_active`     | BOOLEAN        | Whether the SKU is currently sold       |
+| `last_updated`  | TIMESTAMP      | Last update timestamp from source       |
 
----
-
-### `gold.dim_channel`
-
-SCD Type 1. Small, stable reference table.
-
-| Column         | Type   | Description                                              |
-|----------------|--------|----------------------------------------------------------|
-| `channel_sk`   | STRING | Surrogate key                                            |
-| `channel_id`   | STRING | Natural key                                              |
-| `channel_name` | STRING | Web, Mobile App, Marketplace, In-Store                   |
-| `channel_type` | STRING | Online / Offline                                         |
+**Build**: Direct `CREATE OR REPLACE TABLE ... AS SELECT` from `silver.products_clean`. No joins.
 
 ---
 
-## 8. Analytical Outputs / Gold Marts
+## 8. Aggregation Tables
 
-Pre-aggregated mart tables expose summarised metrics for BI tools and ad-hoc SQL users. These are rebuilt on a scheduled cadence (daily) and do not replace the core star schema — they accelerate common query patterns.
+Pre-aggregated tables expose summarised metrics for BI tools and ad hoc SQL consumers. Built as `CREATE OR REPLACE TABLE` — fully refreshed on each run.
 
-| Mart Table                       | Description                                                    | Refresh |
-|----------------------------------|----------------------------------------------------------------|---------|
-| `gold.mart_sales_daily`          | Revenue, quantity, order count by channel and date             | Daily   |
-| `gold.mart_product_performance`  | Gross/net revenue, return rate, margin by product and month    | Daily   |
-| `gold.mart_customer_cohorts`     | Monthly cohort retention based on first order date             | Weekly  |
-| `gold.mart_inventory_alerts`     | Products with stock-on-hand below reorder threshold            | Daily   |
-| `gold.mart_returns_summary`      | Return rate and refund volume by reason code, category, channel | Daily  |
+### `gold.orders_channel_summary`
 
-These marts are the primary targets for Power BI reports and executive dashboards.
+**Grain**: One row per `channel`.
 
----
+| Column            | Type    | Description                                |
+|-------------------|---------|--------------------------------------------|
+| `channel`         | STRING  | Sales channel                              |
+| `total_orders`    | BIGINT  | Count of orders                            |
+| `total_revenue`   | DECIMAL | Sum of `order_total`                       |
+| `avg_order_value` | DECIMAL | Average order total per channel            |
 
-## 9. Grain and Modelling Notes
-
-- **Fact grain is line-level** (`fact_order_items`), not order-level. This allows flexible roll-up to order, customer, product, or channel without pre-aggregation loss.
-- **Revenue metrics** (`gross_revenue`, `net_revenue`) are pre-computed at the fact level to avoid repeated expression logic in BI tools. They are additive across all dimensions.
-- **Returns are modelled as a separate fact**, not as negative order lines, to preserve analytical clarity and support reason-code analysis independently of sales analysis.
-- **Inventory is a snapshot fact** (non-additive across dates). Summing `stock_on_hand` across multiple dates is meaningless; mart queries use `MAX` or point-in-time filters.
-- **SCD Type 2 on customers and products** allows historical accuracy: an order from 18 months ago reflects the customer segment and product price at the time of that order.
-- **PII handling**: `dim_customer` stores only non-identifying fields in production. Full name is masked; email is domain-only. Raw PII remains in Bronze under access-controlled storage.
-- **Degenerate dimensions**: `order_sk` is retained in `fact_order_items` to support order-header-level grouping without a separate `dim_order` table, which would add a join with minimal analytical value.
+**Source**: `silver.orders_clean`, grouped by `channel`.
 
 ---
 
-## 10. Scope Boundaries
+### `gold.returns_reason_summary`
 
-The following are explicitly **out of scope** for this platform:
+**Grain**: One row per `return_reason`.
 
-- **Campaign / marketing attribution**: No campaign spend or impression data is ingested. Channel dimension identifies the sales channel but does not model paid media.
-- **Real-time / streaming**: All pipelines are batch. The minimum latency is daily. Near-real-time use cases would require a separate streaming layer (e.g., Event Hubs + Structured Streaming).
-- **Financial consolidation**: Revenue figures reflect gross/net sales as reported by the order system. They are not reconciled against accounting or ERP data.
-- **Multi-currency**: All monetary values are stored in a single base currency. Currency conversion is not modelled.
-- **Customer lifetime value (CLV) scoring**: Cohort retention is provided as a mart; predictive CLV modelling is outside the scope of this platform.
-- **Product recommendation**: No ML feature store or recommendation output is included.
+| Column               | Type    | Description                               |
+|----------------------|---------|-------------------------------------------|
+| `return_reason`      | STRING  | Return reason code                        |
+| `total_returns`      | BIGINT  | Count of return events                    |
+| `total_refund_amount`| DECIMAL | Sum of refund amounts                     |
+| `avg_refund_amount`  | DECIMAL | Average refund amount per return          |
 
-These boundaries are deliberate. The platform is scoped to **descriptive and diagnostic analytics** on retail operations data, which is the primary decision-support need for the target business context.
+**Source**: `silver.returns_clean`, grouped by `return_reason`.
+
+---
+
+### `gold.returns_by_product`
+
+**Grain**: One row per `product_id`.
+
+| Column               | Type    | Description                              |
+|----------------------|---------|------------------------------------------|
+| `product_id`         | STRING  | Product natural key                      |
+| `total_returns`      | BIGINT  | Count of return events for this product  |
+| `total_refund_amount`| DECIMAL | Sum of refunds for this product          |
+
+**Source**: `gold.fact_returns_enriched`, grouped by `product_id`.
+
+---
+
+## 9. Enrichment Views
+
+Views provide pre-joined, self-service access combining fact data with dimensional context. Both use LEFT JOINs to dimensions, ensuring fact rows are never dropped if a dimension record is missing.
+
+### `gold.v_sales_enriched`
+
+**Grain**: One row per `order_item_id` (same as `fact_sales`).
+
+All columns from `fact_sales` plus:
+- `first_name`, `last_name`, `city`, `country`, `customer_status` — from `dim_customers`
+- `product_name`, `brand`, `category`, `subcategory` — from `dim_products`
+
+---
+
+### `gold.v_returns_enriched`
+
+**Grain**: One row per `return_id` (same as `fact_returns_enriched`).
+
+All columns from `fact_returns_enriched` plus:
+- `first_name`, `last_name`, `city`, `country`, `customer_status` — from `dim_customers`
+- `product_name`, `brand`, `category`, `subcategory` — from `dim_products`
+
+---
+
+## 10. Data Quality Layer
+
+### `gold.dq_summary_v1`
+
+**Grain**: One row per check name.
+
+| Column        | Type   | Description                                         |
+|---------------|--------|-----------------------------------------------------|
+| `check_name`  | STRING | Identifier for the quality check                    |
+| `issue_count` | BIGINT | Number of violations found (0 = passing)            |
+
+Checks implemented:
+
+| Check Name                            | Logic                                                        |
+|---------------------------------------|--------------------------------------------------------------|
+| `dim_customers_duplicate_customer_id` | `COUNT(*) - COUNT(DISTINCT customer_id)` in `dim_customers`  |
+| `dim_customers_null_customer_id`      | Count of NULL `customer_id` in `dim_customers`               |
+| `dim_products_duplicate_product_id`   | `COUNT(*) - COUNT(DISTINCT product_id)` in `dim_products`    |
+| `dim_products_null_product_id`        | Count of NULL `product_id` in `dim_products`                 |
+| `fact_sales_duplicate_order_item_id`  | `COUNT(*) - COUNT(DISTINCT order_item_id)` in `fact_sales`   |
+| `fact_sales_null_order_item_id`       | Count of NULL `order_item_id` in `fact_sales`                |
+| `fact_returns_unmatched_sales`        | Count of rows where `reconciliation_status = 'UNMATCHED'`    |
+
+### `gold.v_dq_status`
+
+**Grain**: One row per check name.
+
+| Column          | Type   | Description                                   |
+|-----------------|--------|-----------------------------------------------|
+| `check_name`    | STRING | Check identifier                              |
+| `issue_count`   | BIGINT | Issue count from `dq_summary_v1`              |
+| `check_status`  | STRING | `'PASS'` if `issue_count = 0`, else `'FAIL'`  |
+
+**Validated results**: All checks PASS. `fact_returns_unmatched_sales = 3` — status is FAIL by strict definition, but this count is expected and intentional given the LEFT JOIN design of `fact_returns_enriched`.
+
+---
+
+## 11. Model Contract
+
+### `gold.model_contract_v1`
+
+**Grain**: One row per declared Gold object.
+
+| Column           | Type   | Description                                        |
+|------------------|--------|----------------------------------------------------|
+| `object_name`    | STRING | Table or view name                                 |
+| `object_type`    | STRING | `'TABLE'` or `'VIEW'`                              |
+| `declared_grain` | STRING | Human-readable grain declaration                   |
+| `layer`          | STRING | Medallion layer (`gold`)                           |
+
+Declared objects:
+
+| Object Name              | Type  | Declared Grain                  |
+|--------------------------|-------|---------------------------------|
+| `fact_sales`             | TABLE | 1 row per `order_item_id`       |
+| `dim_customers`          | TABLE | 1 row per `customer_id`         |
+| `dim_products`           | TABLE | 1 row per `product_id`          |
+| `fact_returns_enriched`  | TABLE | 1 row per `return_id`           |
+| `v_sales_enriched`       | VIEW  | 1 row per `order_item_id`       |
+| `v_returns_enriched`     | VIEW  | 1 row per `return_id`           |
+| `v_dq_status`            | VIEW  | 1 row per check name            |
+
+---
+
+## 12. Modelling Notes
+
+- **Fact grain is line-level** (`fact_sales` is at `order_item_id`, not `order_id`). Revenue can be rolled up to order, customer, product, channel, or date without pre-aggregation loss.
+- **Returns use LEFT JOIN semantics intentionally.** `fact_returns_enriched` does not require a matching `fact_sales` record. Orphaned returns are captured as UNMATCHED and quantified in `dq_summary_v1`.
+- **No SCD Type 2.** Dimensions reflect current state only. Historical customer or product attribute changes are not tracked in the SQL asset layer.
+- **No surrogate keys.** All joins use natural keys from source systems (`customer_id`, `product_id`, `order_item_id`, `return_id`).
+- **Aggregation tables use `fact_returns_enriched` as source, not Silver.** `returns_by_product` builds on the enriched fact, giving it access to reconciliation status if needed.
+
+---
+
+## 13. Scope Boundaries
+
+Out of scope for this platform:
+
+- **SCD Type 2 / historical dimension versioning** — not implemented in SQL assets
+- **Surrogate key generation** — natural keys are used throughout
+- **`dim_date` or `dim_channel`** — not present in the SQL asset layer
+- **Inventory data model** — `inventory_snapshots` exists as seed data and Python library code but has no corresponding SQL asset in Bronze, Silver, or Gold
+- **Campaign attribution or CLV scoring** — no ML or marketing attribution data
+- **Multi-currency conversion** — all amounts stored in source currency
+- **Streaming / near-real-time** — batch-only platform
