@@ -40,8 +40,9 @@ jobs:
 
       - name: Validate bundle (dev target)
         # Validates databricks.yml schema and variable resolution locally.
-        # No deployment occurs. Dummy credentials satisfy CLI auth init;
-        # bundle validate does not make workspace API calls.
+        # No deployment occurs. Dummy credentials satisfy CLI auth init.
+        # Note: mode:development triggers a workspace user-identity call,
+        # so the dev target intentionally omits it for offline validation.
         run: databricks bundle validate --target dev
         env:
           DATABRICKS_HOST: https://adb-placeholder.azuredatabricks.net

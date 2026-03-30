@@ -33,7 +33,6 @@ variables:
 
 targets:
   dev:
-    mode: development
     default: true
     variables:
       catalog: dev_catalog
