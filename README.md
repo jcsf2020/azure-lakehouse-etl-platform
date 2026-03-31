@@ -134,32 +134,66 @@ Silver order items depend on Silver orders and Silver products completing first.
 
 ---
 
+## Execution Runtime
+
+### Validated path
+
+`scripts/run_full_pipeline.py` is the validated execution harness. It connects to a Databricks SQL Warehouse via environment variables and executes all SQL layers in dependency order — Bronze → Silver → Gold → DQ → Contracts — against the same Unity Catalog namespace used by the ADF path.
+
+```bash
+export DATABRICKS_HOST=https://adb-xxxx.azuredatabricks.net
+export DATABRICKS_TOKEN=<pat-or-service-principal-secret>
+export DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/xxxx
+
+python scripts/run_full_pipeline.py               # Full run — all layers
+python scripts/run_full_pipeline.py --skip-bronze # Silver onward — Bronze already populated
+python scripts/run_full_pipeline.py --dry-run     # Validate asset discovery without executing
+```
+
+Each run produces a timestamped artifact directory under `artifacts/execution_runs/<run_id>/` containing a structured `run_log.json` (per-step status, duration, DQ check results, errors) and CSV exports of key Gold tables. The latest successful run is committed in the repository.
+
+The Bronze SQL scripts use the `read_files()` table-valued function — Databricks SQL ingests directly from ADLS Gen2 with no PySpark or Spark cluster required at the Bronze layer.
+
+### Production deployment target
+
+The ADF orchestration documented above is the intended production deployment architecture: ADF schedules and sequences the pipeline, triggering Databricks notebooks for Bronze → Silver transformation and a Databricks SQL job for Gold. The Python library under `src/azure_lakehouse_etl/` implements the PySpark transformation logic for the Bronze → Silver notebooks in that path.
+
+Both paths produce identical objects under `lakehouse_prod.*`. The SQL assets in `sql/gold/`, `sql/dq/`, and `sql/contracts/` are shared. See [`docs/execution-model.md`](docs/execution-model.md) for a full side-by-side comparison, including hardcodes and the promotion roadmap.
+
+---
+
 ## Repository Structure
 
 ```text
 azure-lakehouse-etl-platform/
 ├── sql/
-│   ├── bronze/          # 5 raw table DDL scripts
-│   ├── silver/          # 5 clean table DDL scripts
+│   ├── bronze/          # 5 raw ingestion scripts (read_files → Delta)
+│   ├── silver/          # 5 cleansed table scripts (CTAS from Bronze)
 │   ├── gold/            # 9 objects: facts, dims, aggregates, views
 │   ├── dq/              # dq_summary_v1 + v_dq_status
 │   └── contracts/       # model_contract_v1
 │
+├── scripts/
+│   └── run_full_pipeline.py   # Validated execution harness (SQL-first runtime)
+│
+├── artifacts/
+│   └── execution_runs/  # Timestamped run logs and CSV exports (latest run committed)
+│
 ├── adf/
-│   └── pipelines/       # 4 ADF pipeline definitions (JSON)
+│   └── pipelines/       # 4 ADF pipeline definitions (JSON) — production deployment path
 │
 ├── src/
-│   └── azure_lakehouse_etl/   # Python transformation library (Bronze→Silver)
+│   └── azure_lakehouse_etl/   # Python transformation library (Bronze→Silver, ADF path)
 │
 ├── databricks/
-│   └── notebooks/       # Thin Databricks notebook entrypoints
+│   └── notebooks/       # Thin Databricks notebook entrypoints (ADF path)
 │
 ├── tests/
-│   └── quality/         # CI smoke tests for Python modules
+│   └── quality/         # CI smoke tests for Python transformation library
 │
 ├── data_samples/        # Seed data for local development
 ├── config/              # source_catalog.yml
-└── docs/                # Architecture, data model, pipeline design, runbook, business case
+└── docs/                # Architecture, execution model, data model, pipeline design, runbook
 ```
 
 ---
@@ -189,3 +223,4 @@ Smoke tests validate the Python transformation library used for Bronze and Silve
 | Intentional LEFT JOIN semantics | `fact_returns_enriched` preserves unmatched returns by design |
 | Azure-native orchestration | ADF controls scheduling, sequencing, and failure handling |
 | Medallion architecture — executed | Bronze, Silver, Gold are live Delta tables in Unity Catalog, not a design sketch |
+| Validated execution artifacts | `run_full_pipeline.py` proven against Databricks SQL Warehouse; run logs and CSV exports in `artifacts/execution_runs/` |
