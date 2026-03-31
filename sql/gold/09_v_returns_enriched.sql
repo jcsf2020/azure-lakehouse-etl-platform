@@ -1,5 +1,5 @@
 -- grain: 1 row per return_id
-CREATE OR REPLACE VIEW lakehouse_prod.gold.v_returns_enriched
+CREATE OR REPLACE VIEW {{catalog}}.gold.v_returns_enriched
 AS
 SELECT
   r.return_id,
@@ -25,8 +25,8 @@ SELECT
   r.unit_price,
   r.discount_amount,
   r.line_total
-FROM lakehouse_prod.gold.fact_returns_enriched r
-LEFT JOIN lakehouse_prod.gold.dim_customers c
+FROM {{catalog}}.gold.fact_returns_enriched r
+LEFT JOIN {{catalog}}.gold.dim_customers c
   ON r.customer_id = c.customer_id
-LEFT JOIN lakehouse_prod.gold.dim_products p
+LEFT JOIN {{catalog}}.gold.dim_products p
   ON r.product_id = p.product_id;

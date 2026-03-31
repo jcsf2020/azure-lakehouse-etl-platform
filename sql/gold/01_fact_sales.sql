@@ -1,5 +1,5 @@
 -- grain: 1 row per order_item_id
-CREATE OR REPLACE TABLE lakehouse_prod.gold.fact_sales
+CREATE OR REPLACE TABLE {{catalog}}.gold.fact_sales
 USING DELTA
 AS
 SELECT
@@ -15,6 +15,6 @@ SELECT
   oi.line_total,
   o.currency,
   o.order_status
-FROM lakehouse_prod.silver.order_items_clean oi
-INNER JOIN lakehouse_prod.silver.orders_clean o
+FROM {{catalog}}.silver.order_items_clean oi
+INNER JOIN {{catalog}}.silver.orders_clean o
   ON oi.order_id = o.order_id;

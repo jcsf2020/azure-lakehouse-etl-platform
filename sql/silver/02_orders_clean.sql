@@ -1,4 +1,4 @@
-CREATE OR REPLACE TABLE lakehouse_prod.silver.orders_clean
+CREATE OR REPLACE TABLE {{catalog}}.silver.orders_clean
 USING DELTA
 AS
 SELECT
@@ -9,5 +9,5 @@ SELECT
   order_status,
   currency,
   order_total
-FROM lakehouse_prod.bronze.orders_raw
+FROM {{catalog}}.bronze.orders_raw
 WHERE _rescued_data IS NULL;

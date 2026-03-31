@@ -1,4 +1,4 @@
-CREATE OR REPLACE TABLE lakehouse_prod.gold.orders_channel_summary
+CREATE OR REPLACE TABLE {{catalog}}.gold.orders_channel_summary
 USING DELTA
 AS
 SELECT
@@ -6,5 +6,5 @@ SELECT
   COUNT(*) AS total_orders,
   SUM(order_total) AS total_revenue,
   AVG(order_total) AS avg_order_value
-FROM lakehouse_prod.silver.orders_clean
+FROM {{catalog}}.silver.orders_clean
 GROUP BY channel;

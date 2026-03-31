@@ -1,5 +1,5 @@
 -- grain: 1 row per product_id
-CREATE OR REPLACE TABLE lakehouse_prod.gold.dim_products
+CREATE OR REPLACE TABLE {{catalog}}.gold.dim_products
 USING DELTA
 AS
 SELECT
@@ -13,4 +13,4 @@ SELECT
   currency,
   is_active,
   last_updated
-FROM lakehouse_prod.silver.products_clean;
+FROM {{catalog}}.silver.products_clean;

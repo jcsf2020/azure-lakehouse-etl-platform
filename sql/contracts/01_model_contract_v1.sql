@@ -1,4 +1,4 @@
-CREATE OR REPLACE TABLE lakehouse_prod.gold.model_contract_v1
+CREATE OR REPLACE TABLE {{catalog}}.gold.model_contract_v1
 USING DELTA
 AS
 SELECT 'fact_sales' AS object_name, 'TABLE' AS object_type, '1 row per order_item_id' AS declared_grain, 'gold' AS layer

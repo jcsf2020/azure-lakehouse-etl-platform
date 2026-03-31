@@ -1,4 +1,4 @@
-CREATE OR REPLACE TABLE lakehouse_prod.bronze.returns_raw
+CREATE OR REPLACE TABLE {{catalog}}.bronze.returns_raw
 USING DELTA
 AS
 SELECT
@@ -11,7 +11,7 @@ SELECT
   CAST(refund_amount AS DECIMAL(10,2)) AS refund_amount,
   _rescued_data
 FROM read_files(
-  'abfss://bronze@stazlakeetlweu01.dfs.core.windows.net/azure-lakehouse-etl/seed/returns.csv',
+  'abfss://bronze@{{storage_account}}.dfs.core.windows.net/azure-lakehouse-etl/seed/returns.csv',
   format => 'csv',
   header => true,
   inferSchema => true
