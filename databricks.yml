@@ -1,0 +1,45 @@
+# Databricks Asset Bundle — Azure Lakehouse ETL Platform
+#
+# This file defines the bundle scaffold for future workspace-managed
+# deployment. It is currently used only for CI schema validation via:
+#
+#   databricks bundle validate --target dev
+#
+# No Databricks Workflow or job is defined here yet. The validated
+# runtime for this platform is local execution via:
+#
+#   python scripts/run_full_pipeline.py
+#
+# See docs/ci-cd.md for the current CI boundary and the gaps that
+# must be resolved before a live deploy is viable.
+
+bundle:
+  name: azure-lakehouse-etl
+
+variables:
+  catalog:
+    description: >
+      Label for the target Unity Catalog environment.
+      This variable is not wired to SQL asset execution — all SQL files
+      currently hardcode the catalog name directly. This variable is a
+      placeholder for a future parameterisation pass.
+    default: dev_catalog
+
+  schema:
+    description: >
+      Label for the target schema within the catalog.
+      Same caveat as catalog — not substituted into SQL assets at runtime.
+    default: sales_analytics
+
+targets:
+  dev:
+    default: true
+    variables:
+      catalog: dev_catalog
+      schema: sales_analytics
+
+  prod:
+    mode: production
+    variables:
+      catalog: prod_catalog
+      schema: sales_analytics
