@@ -236,3 +236,15 @@ Smoke tests validate the Python transformation library used for Bronze and Silve
 | Azure-native orchestration | ADF controls scheduling, sequencing, and failure handling |
 | Medallion architecture — executed | Bronze, Silver, Gold are live Delta tables in Unity Catalog, not a design sketch |
 | Validated execution artifacts | `run_full_pipeline.py` proven against Databricks SQL Warehouse; run logs and CSV exports in `artifacts/execution_runs/` |
+
+---
+
+## Why This Project Matters
+
+This platform is built to demonstrate the architecture patterns and execution discipline expected in Azure Databricks data engineering roles — with evidence, not descriptions.
+
+- **SQL-first serving layer.** The entire Gold layer is defined in SQL DDL, not notebooks. A common pattern in Databricks-centric serving layers; keeps the Gold layer declarative, reviewable, and easy to validate.
+- **DQ as a pipeline output.** `v_dq_status` runs as part of the pipeline; its results are committed as artifacts. Queryable and provable — not just logged.
+- **Formal model contract.** `model_contract_v1` declares grain and object type for every Gold asset. A structured discipline signal, not documentation.
+- **Execution evidence committed.** Run logs, DQ status, and Gold table exports are in the repository under `artifacts/execution_runs/`. The platform is validated, not hypothetical.
+- **Honest scope.** Seed data, full rebuild semantics, no live ADF deployment. The architecture is correct; the scale is intentionally small. See [`docs/evidence-summary.md`](docs/evidence-summary.md) for a full evidence and limitations summary.
