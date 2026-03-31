@@ -1,4 +1,4 @@
-CREATE OR REPLACE TABLE lakehouse_prod.silver.returns_clean
+CREATE OR REPLACE TABLE {{catalog}}.silver.returns_clean
 USING DELTA
 AS
 SELECT
@@ -9,5 +9,5 @@ SELECT
   customer_id,
   return_reason,
   refund_amount
-FROM lakehouse_prod.bronze.returns_raw
+FROM {{catalog}}.bronze.returns_raw
 WHERE _rescued_data IS NULL;

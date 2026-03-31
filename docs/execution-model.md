@@ -120,6 +120,34 @@ abfss://bronze@stazlakeetlweu01.dfs.core.windows.net/azure-lakehouse-etl/seed/
 
 ---
 
+## Environment Parameterization
+
+Both hardcodes above are now resolved at execution time by `run_full_pipeline.py`. SQL files use `{{catalog}}` and `{{storage_account}}` placeholders; the harness substitutes them before sending SQL to Databricks.
+
+**Resolution order** (highest wins):
+
+| Source | Variables |
+|---|---|
+| `PIPELINE_CATALOG` / `PIPELINE_STORAGE_ACCOUNT` env vars | override everything |
+| `PIPELINE_ENV` → `config/environments.yml` lookup | `dev` or `prod` block |
+| Built-in defaults | `lakehouse_prod` / `stazlakeetlweu01` |
+
+**Run against dev:**
+
+```bash
+PIPELINE_ENV=dev python scripts/run_full_pipeline.py
+```
+
+**Run with explicit override:**
+
+```bash
+PIPELINE_CATALOG=lakehouse_staging python scripts/run_full_pipeline.py
+```
+
+**Backward compatibility:** if no environment variables are set, the defaults resolve to `lakehouse_prod` / `stazlakeetlweu01` — identical to the pre-parameterization behavior.
+
+---
+
 ## Promotion path
 
 The steps required to move from the current validated state to a fully automated Databricks Workflow deployment:

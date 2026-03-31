@@ -1,4 +1,4 @@
-CREATE OR REPLACE TABLE lakehouse_prod.bronze.order_items_raw
+CREATE OR REPLACE TABLE {{catalog}}.bronze.order_items_raw
 USING DELTA
 AS
 SELECT
@@ -11,7 +11,7 @@ SELECT
   CAST(line_total AS DECIMAL(10,2)) AS line_total,
   _rescued_data
 FROM read_files(
-  'abfss://bronze@stazlakeetlweu01.dfs.core.windows.net/azure-lakehouse-etl/seed/order_items.json',
+  'abfss://bronze@{{storage_account}}.dfs.core.windows.net/azure-lakehouse-etl/seed/order_items.json',
   format => 'json',
   multiLine => true
 );

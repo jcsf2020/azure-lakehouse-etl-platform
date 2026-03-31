@@ -1,0 +1,7 @@
+dev:
+  catalog: lakehouse_dev
+  storage_account: stazlakeetlweu01
+
+prod:
+  catalog: lakehouse_prod
+  storage_account: stazlakeetlweu01

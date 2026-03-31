@@ -1,5 +1,5 @@
 -- grain: 1 row per return_id
-CREATE OR REPLACE TABLE lakehouse_prod.gold.fact_returns_enriched
+CREATE OR REPLACE TABLE {{catalog}}.gold.fact_returns_enriched
 USING DELTA
 AS
 SELECT
@@ -20,6 +20,6 @@ SELECT
     WHEN s.order_id IS NULL THEN 'UNMATCHED'
     ELSE 'MATCHED'
   END AS reconciliation_status
-FROM lakehouse_prod.silver.returns_clean r
-LEFT JOIN lakehouse_prod.gold.fact_sales s
+FROM {{catalog}}.silver.returns_clean r
+LEFT JOIN {{catalog}}.gold.fact_sales s
   ON r.order_item_id = s.order_item_id;

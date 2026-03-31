@@ -38,6 +38,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SQL_ROOT = REPO_ROOT / "sql"
 ARTIFACTS_ROOT = REPO_ROOT / "artifacts" / "execution_runs"
+CONFIG_PATH = REPO_ROOT / "config" / "environments.yml"
 
 # Layer execution order — dependency-safe.
 # Within each layer, files are sorted by filename prefix (01_, 02_, ...).
@@ -50,20 +51,21 @@ _SQL_LAYERS = ("bronze", "silver", "gold", "dq", "contracts")
 _EXPECTED_NONZERO: frozenset[str] = frozenset({"fact_returns_unmatched_sales"})
 
 # SELECT queries used to export artifacts after the Gold build.
+# Use {{catalog}} placeholder — resolved at runtime via _substitute().
 _EXPORT_QUERIES: dict[str, str] = {
     "dq_status": (
         "SELECT check_name, issue_count, check_status "
-        "FROM lakehouse_prod.gold.v_dq_status "
+        "FROM {{catalog}}.gold.v_dq_status "
         "ORDER BY check_name"
     ),
     "fact_sales_sample": (
-        "SELECT * FROM lakehouse_prod.gold.fact_sales LIMIT 100"
+        "SELECT * FROM {{catalog}}.gold.fact_sales LIMIT 100"
     ),
     "fact_returns_enriched_sample": (
-        "SELECT * FROM lakehouse_prod.gold.fact_returns_enriched LIMIT 100"
+        "SELECT * FROM {{catalog}}.gold.fact_returns_enriched LIMIT 100"
     ),
     "returns_by_product": (
-        "SELECT * FROM lakehouse_prod.gold.returns_by_product "
+        "SELECT * FROM {{catalog}}.gold.returns_by_product "
         "ORDER BY total_returns DESC"
     ),
 }
@@ -169,11 +171,50 @@ def open_connection():
 
 
 # ---------------------------------------------------------------------------
+# Environment parameterization
+# ---------------------------------------------------------------------------
+def _load_params() -> dict[str, str]:
+    """Resolve catalog and storage_account from env or config/environments.yml.
+
+    Resolution order (highest wins):
+      1. PIPELINE_CATALOG / PIPELINE_STORAGE_ACCOUNT environment variables
+      2. PIPELINE_ENV  →  config/environments.yml lookup
+      3. Hardcoded defaults: lakehouse_prod / stazlakeetlweu01 (current runtime)
+    """
+    defaults: dict[str, str] = {
+        "catalog": "lakehouse_prod",
+        "storage_account": "stazlakeetlweu01",
+    }
+
+    env_name = os.environ.get("PIPELINE_ENV", "prod")
+    if CONFIG_PATH.exists():
+        import yaml  # noqa: PLC0415
+        with CONFIG_PATH.open(encoding="utf-8") as fh:
+            config = yaml.safe_load(fh) or {}
+        if env_name in config:
+            defaults.update(config[env_name])
+
+    if os.environ.get("PIPELINE_CATALOG"):
+        defaults["catalog"] = os.environ["PIPELINE_CATALOG"]
+    if os.environ.get("PIPELINE_STORAGE_ACCOUNT"):
+        defaults["storage_account"] = os.environ["PIPELINE_STORAGE_ACCOUNT"]
+
+    return defaults
+
+
+def _substitute(sql: str, params: dict[str, str]) -> str:
+    """Replace {{key}} placeholders with resolved parameter values."""
+    for key, val in params.items():
+        sql = sql.replace("{{" + key + "}}", val)
+    return sql
+
+
+# ---------------------------------------------------------------------------
 # Execution helpers
 # ---------------------------------------------------------------------------
-def _exec_file(cursor, path: Path) -> tuple[float, str | None]:
+def _exec_file(cursor, path: Path, params: dict[str, str]) -> tuple[float, str | None]:
     """Execute one SQL file. Returns (elapsed_seconds, error_or_None)."""
-    sql = path.read_text(encoding="utf-8").strip()
+    sql = _substitute(path.read_text(encoding="utf-8").strip(), params)
     t0 = time.perf_counter()
     try:
         cursor.execute(sql)
@@ -243,6 +284,7 @@ def _print_summary(result: RunResult) -> None:
 # ---------------------------------------------------------------------------
 def run_pipeline(skip_bronze: bool, dry_run: bool) -> RunResult:
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    params = _load_params()
     result = RunResult(
         run_id=run_id,
         started_at=datetime.now(timezone.utc).isoformat(),
@@ -250,10 +292,12 @@ def run_pipeline(skip_bronze: bool, dry_run: bool) -> RunResult:
 
     log.info("=" * 60)
     log.info("Azure Lakehouse ETL Platform — Full Pipeline Run")
-    log.info("  run_id : %s", run_id)
-    log.info("  mode   : %s", "DRY RUN" if dry_run else "LIVE EXECUTION")
+    log.info("  run_id          : %s", run_id)
+    log.info("  mode            : %s", "DRY RUN" if dry_run else "LIVE EXECUTION")
+    log.info("  catalog         : %s", params["catalog"])
+    log.info("  storage_account : %s", params["storage_account"])
     if skip_bronze:
-        log.info("  bronze : SKIPPED (--skip-bronze)")
+        log.info("  bronze          : SKIPPED (--skip-bronze)")
     log.info("=" * 60)
 
     plan = build_plan(skip_bronze)
@@ -306,7 +350,7 @@ def run_pipeline(skip_bronze: bool, dry_run: bool) -> RunResult:
                     continue
 
                 log.info("[%-9s] %s ...", layer, path.name)
-                elapsed, err = _exec_file(cursor, path)
+                elapsed, err = _exec_file(cursor, path, params)
 
                 if err:
                     log.error("  FAILED (%.2fs): %s", elapsed, err)
@@ -332,7 +376,7 @@ def run_pipeline(skip_bronze: bool, dry_run: bool) -> RunResult:
             log.info("STEP 2  DQ validation  (v_dq_status)")
             log.info("─" * 60)
 
-            dq_rows = _fetch_rows(cursor, _EXPORT_QUERIES["dq_status"])
+            dq_rows = _fetch_rows(cursor, _substitute(_EXPORT_QUERIES["dq_status"], params))
             unexpected_failures: list[str] = []
 
             for row in dq_rows:
@@ -369,7 +413,7 @@ def run_pipeline(skip_bronze: bool, dry_run: bool) -> RunResult:
 
             for name, query in _EXPORT_QUERIES.items():
                 try:
-                    rows = _fetch_rows(cursor, query)
+                    rows = _fetch_rows(cursor, _substitute(query, params))
                     dest = artifact_dir / f"{name}.csv"
                     _write_csv(rows, dest)
                     log.info("  %-36s → %d rows  →  %s", name, len(rows), dest.name)

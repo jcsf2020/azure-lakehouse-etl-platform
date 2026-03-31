@@ -150,6 +150,18 @@ python scripts/run_full_pipeline.py --skip-bronze # Silver onward — Bronze alr
 python scripts/run_full_pipeline.py --dry-run     # Validate asset discovery without executing
 ```
 
+Two parameters control which environment is targeted. Defaults preserve current production behavior (`lakehouse_prod` / `stazlakeetlweu01`) so existing runs are unaffected.
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `PIPELINE_ENV` | Selects a named block from `config/environments.yml` (`dev` or `prod`) | `prod` |
+| `PIPELINE_CATALOG` | Overrides catalog directly | `lakehouse_prod` |
+| `PIPELINE_STORAGE_ACCOUNT` | Overrides ADLS Gen2 storage account directly | `stazlakeetlweu01` |
+
+```bash
+PIPELINE_ENV=dev python scripts/run_full_pipeline.py   # target lakehouse_dev
+```
+
 Each run produces a timestamped artifact directory under `artifacts/execution_runs/<run_id>/` containing a structured `run_log.json` (per-step status, duration, DQ check results, errors) and CSV exports of key Gold tables. The latest successful run is committed in the repository.
 
 The Bronze SQL scripts use the `read_files()` table-valued function — Databricks SQL ingests directly from ADLS Gen2 with no PySpark or Spark cluster required at the Bronze layer.
