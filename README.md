@@ -1,9 +1,27 @@
 # Azure Lakehouse ETL Platform
 
-A production-grade data engineering platform built on Azure Databricks, ADLS Gen2, and Azure Data Factory. Implements a full medallion architecture — Bronze → Silver → Gold — for retail and eCommerce analytics, with SQL-driven serving, explicit data quality validation, and formal model contracts.
+A validated data engineering reference platform built on Azure Databricks, ADLS Gen2, and Azure Data Factory. Implements a full medallion architecture — Bronze → Silver → Gold — for retail and eCommerce analytics, with SQL-driven serving, explicit data quality validation, and formal model contracts.
 
 ---
 
+## Career Evidence Snapshot
+
+This repository is a validated Azure/Databricks lakehouse reference project for Data Engineering roles. It demonstrates SQL-first execution against Unity Catalog Delta tables, data quality gates, model contracts, CI validation, and career-facing evidence packaging.
+
+**Current evidence level:** supporting Azure proof asset for recruitment and B2B positioning.
+
+| Area | Evidence |
+|---|---|
+| Runtime execution | `scripts/run_full_pipeline.py` executed against Databricks SQL Warehouse |
+| Latest committed run | `20260330_222422` — 46.6s, 17 SQL steps, `SUCCESS` |
+| Data quality | `dq_summary_v1` and `v_dq_status`; 6/7 checks PASS, 1 expected FAIL documented by design |
+| Architecture | Bronze/Silver/Gold medallion model, Unity Catalog, Delta objects, ADF orchestration definitions |
+| Recruitability package | `docs/career-pack.md`, `docs/evidence-summary.md`, `docs/business-case.md` |
+| CI / validation | GitHub Actions, Databricks bundle YAML validation, Python smoke tests |
+
+**Honest boundary:** this is not claimed as a client production system. It is a validated personal/reference platform using seed data, committed run artifacts, and explicit limitations documented in `docs/evidence-summary.md`.
+
+---
 ## Platform Overview
 
 The platform ingests raw retail operational data (orders, order items, customers, products, returns), transforms it through structured medallion layers, and delivers analytics-ready tables and views in Databricks SQL via Unity Catalog. All Gold layer objects are defined and executed as SQL DDL assets, not Python transformations.
